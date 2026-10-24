@@ -6,7 +6,7 @@ import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import type { Point } from "@/lib/team-canvas";
 import { BotAvatar } from "../Avatar";
-import type { SpaceGoal, SpaceLayout, SpaceLevel } from "../../../shared/space";
+import { SPACE_LEVELS, type SpaceGoal, type SpaceLayout, type SpaceLevel } from "../../../shared/space";
 import { GoalEditor } from "./GoalEditor";
 import { LevelChip } from "./LevelChip";
 import { AddAgentMenu, MenuItem, PointMenu } from "./PointMenu";
@@ -15,6 +15,7 @@ import { SpaceCard, type SpaceCardActions } from "./SpaceCard";
 import { SpacePalette } from "./SpacePalette";
 import { useSpaceDrag, type DragItem, type DropTarget } from "./space-drag";
 import { BENCH_KEY, tileSize } from "./space-layout";
+import { LEVEL_STYLE } from "./space-levels";
 import { ZoneContextMenu, type ZoneMenuTarget } from "./ZoneContextMenu";
 import {
   addTask, answerAsk, askChiefToScan, createGoal, deleteTask, importKanban, newAgentInSpace, newGoalThread, patchTask, placeBot, setBench, setVisualFirst,
@@ -41,7 +42,8 @@ type Editing = { goal?: SpaceGoal; level?: SpaceLevel; at?: Point } | null;
 type Menu =
   | ({ kind: "space" } & ZoneMenuTarget)
   | { kind: "canvas"; x: number; y: number; at: Point }
-  | { kind: "agent"; x: number; y: number; goal: SpaceGoal };
+  | { kind: "agent"; x: number; y: number; goal: SpaceGoal }
+  | { kind: "level"; x: number; y: number; goal: SpaceGoal };
 
 function withPlacement(space: BoardState, botId: string, goalId: string | null): BoardState {
   const { [botId]: _previous, ...rest } = space.placements;
@@ -116,6 +118,7 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
     },
     open: (goal) => setOpenId(goal.id),
     menu: (event, goal, bot) => setMenu({ kind: "space", x: event.clientX, y: event.clientY, goal, ...(bot ? { bot } : {}) }),
+    pickLevel: (event, goal) => setMenu({ kind: "level", x: event.clientX, y: event.clientY, goal }),
     canvasMenu: (screen, at) => setMenu({ kind: "canvas", ...screen, at }),
     newSpaceAt: (at) => setEditing({ level: "general", at }),
     addAgent: (event, goal) => setMenu({ kind: "agent", x: event.clientX, y: event.clientY, goal }),
@@ -191,6 +194,18 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
       </PointMenu>}
       {menu?.kind === "agent" && <AddAgentMenu x={menu.x} y={menu.y} title={menu.goal.title} bots={bots.filter((bot) => space.placements[bot.id] !== menu.goal.id)}
         onPick={(bot) => { place(bot.id, menu.goal.id); setMenu(null); }} onCreate={(name) => { newAgent(name, menu.goal); setMenu(null); }} onClose={closeMenu} />}
+      {menu?.kind === "level" && <PointMenu x={menu.x} y={menu.y} label={t("quest.editor.level")} onClose={closeMenu}>
+        {SPACE_LEVELS.map((level) => (
+          <MenuItem key={level} onClick={() => {
+            setSpace({ ...space, goals: space.goals.map((candidate) => candidate.id === menu.goal.id ? { ...candidate, level } : candidate) });
+            act(updateGoal(menu.goal.id, { level }));
+            setMenu(null);
+          }}>
+            <span aria-hidden="true" className={cn("size-2.5 rounded-full", LEVEL_STYLE[level].dot)} />
+            <span className="flex-1">{t(LEVEL_STYLE[level].label)}</span>
+          </MenuItem>
+        ))}
+      </PointMenu>}
       {editing && <GoalEditor {...editing} onClose={() => setEditing(null)} onSaved={() => void refresh()} />}
     </div>
   );

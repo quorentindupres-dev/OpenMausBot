@@ -4,16 +4,18 @@ This fork adds, on top of upstream OpenMausBot:
 
 - **Spaces map**: the Team map's **Spaces** mode is a canvas like the Map
   (dotted, pan by dragging empty map, zoom with ⌘/Ctrl + scroll or +/−). Each
-  Space is a tile in the department-tile style, colored by its **level** (top
-  band, border, label chip): **P1** red (`danger`), **P2** orange (`warning`),
-  **P3** yellow, **General** gray, **Side quest** darker gray, dashed. Bots sit
-  inside as the same bot cards as the Map; bots with no Space sit in the
-  **Bench** tile.
-  - **Shelf** on the left (collapsible): one block per level (P1, P2, P3,
-    General, Side quest) — drag one onto the map and a Space of that level
-    appears there with its name ready to type; every agent with where it is
-    ("in Website", "on the bench"), with a search box past 8 agents — drag one
-    onto a Space to place it. The shelf is also a drop zone for the bench.
+  Space is a tile in the department-tile style with a light border and label
+  chip colored by its **level**: **P1** red (`danger`), **P2** orange
+  (`warning`), **P3** yellow, **General** gray, **Side quest** darker gray,
+  dashed. Click the level chip on a tile to pick its priority and color. Drag a
+  Space's corner to resize it (`layout: { x, y, w, h }`). Bots sit inside as the
+  same bot cards as the Map; bots with no Space sit in the **Bench** tile, which
+  keeps the Map's `Chief → members` hierarchy.
+  - **Shelf** on the left (collapsible): one **Space** block — drag it onto the
+    map and a Space appears there with its name ready to type, then pick its
+    level and size on the tile; every agent with where it is ("in Website", "on
+    the bench"), with a search box past 8 agents — drag one onto a Space to
+    place it. The shelf is also a drop zone for the bench.
   - All dragging is pointer-based (no HTML5 drag and drop): past 4 px a ghost
     follows the cursor in screen space, the hovered tile lights up, the ghost
     says where it will land ("Move to …", "send it to the bench"), and letting
@@ -174,10 +176,9 @@ Not touched: `src/state/store.tsx`, `server/config.ts`, the ratchet tests.
 
 ## Not in this version
 
-Resizing tiles (they size to their cards), live SSE frames (the board polls every
-3 s), Kanban write-back (a Yes does not file a Kanban proposal), the room
-prompt. The map is proven by render tests (happy-dom) and the HTTP API, not in
-a real browser.
+Live SSE frames (the board polls every 3 s), Kanban write-back (a Yes does not
+file a Kanban proposal), the room prompt. The map is proven by render tests
+(happy-dom) and the HTTP API, not in a real browser.
 
 ## Updates of the desktop app
 

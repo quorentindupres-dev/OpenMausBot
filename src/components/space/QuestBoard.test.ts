@@ -105,25 +105,42 @@ describe("the Spaces map", () => {
     expect([...tile("bench").querySelectorAll("[data-space-card]")].map((card) => card.getAttribute("data-space-card"))).toEqual(["chief"]);
   });
 
-  it("lists the five levels in order and every agent with where it is on the shelf", async () => {
+  it("lists one Space drag block and every agent with where it is on the shelf", async () => {
     await render();
     const shelf = host.querySelector("[data-space-palette]")!;
-    expect([...shelf.querySelectorAll("[data-drag-new]")].map((item) => item.textContent)).toEqual(["P1", "P2", "P3", "General", "Side quest"]);
+    expect([...shelf.querySelectorAll("[data-drag-new]")].map((item) => item.textContent)).toEqual(["Space"]);
     expect(shelf.querySelector('[data-palette-bot="pepper"]')?.textContent).toContain("in Website up");
     expect(shelf.querySelector('[data-palette-bot="chief"]')?.textContent).toContain("on the bench");
   });
 
-  it("drags a level from the shelf onto the map: a Space of that level there, its name ready to type", async () => {
+  it("drags a Space from the shelf onto the map, names it, and picks its priority and size after", async () => {
     await render();
-    dragTo(host.querySelector('[data-drag-new="P3"]')!, canvas());
+    dragTo(host.querySelector('[data-drag-new="general"]')!, canvas());
     await vi.waitFor(() => expect(calls("/api/space/goals")).toHaveLength(1));
-    expect(JSON.parse(calls("/api/space/goals")[0].body)).toMatchObject({ title: "New Space", level: "P3", layout: { x: expect.any(Number), y: expect.any(Number), w: 276 } });
+    expect(JSON.parse(calls("/api/space/goals")[0].body)).toMatchObject({ title: "New Space", level: "general", layout: { x: expect.any(Number), y: expect.any(Number), w: 276 } });
     await vi.waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("Space name"));
     const input = document.activeElement as HTMLInputElement;
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
     flushSync(() => { setter.call(input, "Launch ads"); input.dispatchEvent(new Event("input", { bubbles: true })); });
     flushSync(() => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     await vi.waitFor(() => expect(calls("/api/space/goals/new")).toEqual([{ method: "PATCH", body: JSON.stringify({ title: "Launch ads" }) }]));
+    flushSync(() => tile("new").querySelector<HTMLButtonElement>("[data-level-picker]")!.click());
+    flushSync(() => button(document.querySelector("[data-quest-menu]")!, "P1").click());
+    await vi.waitFor(() => expect(calls("/api/space/goals/new").at(-1)).toEqual({ method: "PATCH", body: JSON.stringify({ level: "P1" }) }));
+  });
+
+  it("resizes a Space by dragging its corner and keeps the bench's chief → members hierarchy", async () => {
+    fixture.board = { ...(fixture.board as ReturnType<typeof board>), placements: { pepper: "web" } };
+    await render();
+    expect(tile("bench").querySelector('[data-bench-lane="chiefs"] [data-space-card="chief"]')).not.toBeNull();
+    expect(tile("bench").querySelector("[data-bench-hierarchy]")).not.toBeNull();
+    expect(tile("bench").querySelector('[data-bench-lane="members"] [data-space-card="warm"]')).not.toBeNull();
+    const corner = tile("web").querySelector('[data-tile-resize="web"][data-resize-corner="se"]')!;
+    flushSync(() => pointer(corner, "pointerdown", 10, 10));
+    flushSync(() => pointer(canvas(), "pointermove", 160, 130));
+    flushSync(() => pointer(canvas(), "pointerup", 160, 130));
+    await vi.waitFor(() => expect(calls("/api/space/goals/web")).toHaveLength(1));
+    expect(JSON.parse(calls("/api/space/goals/web")[0].body).layout).toEqual({ x: 100, y: 80, w: 776, h: 700 });
   });
 
   it("drags an agent from the shelf onto a Space, and a card back to the shelf to bench it", async () => {

@@ -67,9 +67,8 @@ export function SpaceCard({ goal, bots, allBots, threads, notes, actions, fill =
   return (
     <section aria-label={t("quest.space.aria", { title: goal.title })} data-goal-zone={goal.id} data-level={goal.level}
       onContextMenu={(event) => { if ((event.target as HTMLElement).closest("input,select,textarea")) return; event.preventDefault(); actions.menu(event); }}
-      className={cn("relative flex min-w-0 flex-col gap-1.5 overflow-y-auto rounded-2xl border bg-panel p-3 pt-4", fill ? "h-full" : "aspect-square",
+      className={cn("relative flex min-w-0 flex-col gap-1.5 overflow-y-auto rounded-2xl border bg-panel p-3", fill ? "h-full" : "aspect-square",
         LEVEL_STYLE[goal.level].border, goal.status !== "active" && "opacity-60")}>
-      <span aria-hidden="true" className={cn("absolute inset-x-0 top-0 h-1.5 rounded-t-2xl", LEVEL_STYLE[goal.level].band)} />
       <div className="flex items-center gap-1.5">
         <LevelChip level={goal.level} />
         {goal.status !== "active" && <span className="rounded bg-control px-1.5 py-0.5 text-[10.5px] text-ink-secondary">{t(goal.status === "done" ? "quest.status.done" : "quest.status.parked")}</span>}

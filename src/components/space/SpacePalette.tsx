@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
 import type { Bot } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { BotAvatar } from "../Avatar";
-import { SPACE_LEVELS, type SpaceState } from "../../../shared/space";
-import { LEVEL_STYLE } from "./space-levels";
+import type { SpaceState } from "../../../shared/space";
 
 const SEARCH_FROM = 9;
 const ITEM = "flex w-full cursor-grab touch-none select-none items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] hover:bg-control active:cursor-grabbing";
@@ -29,14 +28,10 @@ export function SpacePalette({ space, bots, benchHint }: { space: SpaceState; bo
       <button type="button" aria-label={t("quest.palette.close")} title={t("quest.palette.close")} onClick={() => setOpen(false)}
         className="rounded p-1 text-ink-secondary hover:bg-control hover:text-ink"><PanelLeftClose size={15} /></button>
     </div>
-    <div className="grid grid-cols-1 gap-1">
-      {SPACE_LEVELS.map((level) => (
-        <div key={level} data-drag-new={level} role="button" tabIndex={-1} title={t("quest.palette.dragSpace")}
-          className={cn(ITEM, "border bg-card", LEVEL_STYLE[level].border)}>
-          <span aria-hidden="true" className={cn("h-4 w-1.5 rounded-full", LEVEL_STYLE[level].band)} />
-          <span className="font-medium">{t(LEVEL_STYLE[level].label)}</span>
-        </div>
-      ))}
+    <div data-drag-new="general" role="button" tabIndex={-1} title={t("quest.palette.dragSpace")}
+      className={cn(ITEM, "border border-hairline/60 bg-card")}>
+      <Plus size={14} className="shrink-0 text-ink-secondary" />
+      <span className="font-medium">{t("quest.newQuest")}</span>
     </div>
     <div className="flex items-center justify-between">
       <h2 className="text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">{t("quest.palette.agents")}</h2>

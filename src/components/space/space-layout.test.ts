@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import { normalizeGoal } from "../../../shared/space";
-import { BENCH_KEY, layoutSpaces, tileSize, toCanvas } from "./space-layout";
+import { BENCH_KEY, benchSize, goalTileSize, layoutSpaces, resizeTile, tileSize, toCanvas } from "./space-layout";
 
 describe("the Spaces map layout", () => {
-  it("sizes a tile to its cards, two columns past three bots", () => {
+  it("sizes a tile to its cards, respects saved sizes, and sizes the bench with chief → members hierarchy", () => {
     expect(tileSize(0)).toEqual({ w: 276, h: 214 });
     expect(tileSize(3).w).toBe(276);
     expect(tileSize(4).w).toBe(528);
     expect(tileSize(1, true).h).toBeLessThan(tileSize(1).h);
+    expect(goalTileSize(normalizeGoal({ id: "g", title: "G", level: "P1", layout: { x: 0, y: 0, w: 600, h: 480 } }), 1)).toEqual({ w: 600, h: 480 });
+    expect(benchSize(1, 3)).toEqual({ w: 552, h: 494 });
+    expect(resizeTile({ x: 100, y: 80, w: 276, h: 214 }, "se", 200, 120, 0)).toEqual({ x: 100, y: 80, w: 476, h: 334 });
   });
 
   it("keeps saved places and lays the rest out by priority, side quests to the right and the bench below", () => {
