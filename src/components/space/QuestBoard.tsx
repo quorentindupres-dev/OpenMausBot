@@ -238,7 +238,7 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
   };
   const shownError = error || loadError;
   const draggedBot = drag?.item.kind === "bot" ? bots.find((bot) => drag.item.kind === "bot" && bot.id === drag.item.botId) : undefined;
-  const benchTarget = drag?.item.kind === "bot" && (drag.target?.kind === "bench" || drag.target?.kind === "canvas" || (drag.target?.kind === "tile" && drag.target.key === BENCH_KEY));
+  const benchTarget = drag?.item.kind === "bot" && Boolean(drag.item.fromGoalId) && (drag.target?.kind === "bench" || drag.target?.kind === "canvas" || (drag.target?.kind === "tile" && drag.target.key === BENCH_KEY));
   const targetTitle = drag?.target?.kind === "tile" && drag.target.key !== BENCH_KEY ? space.goals.find((goal) => drag.target?.kind === "tile" && goal.id === drag.target.key)?.title : undefined;
   const activeChatBot = chat ? bots.find((bot) => bot.id === chat.botId) : undefined;
   const chatBot = activeChatBot && chat?.threadId
@@ -307,7 +307,8 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
             : <span className="flex items-center gap-2">{draggedBot && <span aria-hidden="true"><BotAvatar bot={draggedBot} size={22} motion="none" motionKey={0} animated={false} /></span>}{draggedBot?.name}</span>}
           <p className="mt-0.5 text-[10.5px] text-ink-secondary">
             {drag.item.kind === "space" ? (drag.target?.kind === "canvas" || drag.target?.kind === "tile" ? t("quest.drag.dropSpace") : t("quest.drag.onMap"))
-              : targetTitle ? t("quest.canvas.moveTo", { title: targetTitle }) : benchTarget ? t("quest.drag.toBench") : t("quest.drag.onMap")}
+              : targetTitle ? (drag.item.fromGoalId ? t("quest.canvas.moveTo", { title: targetTitle }) : `${t("quest.menu.newThreadHere")} · ${targetTitle}`)
+                : benchTarget ? t("quest.drag.toBench") : t("quest.drag.onMap")}
           </p>
         </div>,
         document.body,

@@ -61,7 +61,10 @@ export function BotCard({ bot, selected, moving, connected, tagged = false, sent
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5"><span className="truncate text-[14px] font-semibold">{bot.name}</span>
           {bot.chiefOfStaff && <Crown size={12} className="shrink-0 text-warning" aria-label={t("chat.chiefOfStaff")} />}</span>
-        <span className="mt-1 block truncate text-[11px] text-ink-secondary">{subtitle || bot.title || (bot.chiefOfStaff ? t("chat.chiefOfStaff") : t("canvas.bot"))}</span>
+        <span className="mt-1 flex items-center gap-1 truncate text-[11px] text-ink-secondary">
+          {subtitle && <MessageCircle size={11} className="shrink-0 text-accent" aria-hidden="true" />}
+          <span className="truncate">{subtitle || bot.title || (bot.chiefOfStaff ? t("chat.chiefOfStaff") : t("canvas.bot"))}</span>
+        </span>
       </span>
     </button>
     <div className="flex h-[43px] items-center gap-1 border-t border-hairline/30 px-2">

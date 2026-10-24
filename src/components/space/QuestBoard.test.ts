@@ -111,7 +111,7 @@ describe("the Spaces map", () => {
     expect(tile("logo").className).toContain("border-dashed");
     expect(tile("web").textContent).toContain("Outcomes 1/2 · Open tasks 1 · Asks 1");
     expect(tile("web").querySelector('[data-space-card="pepper"]')?.textContent).toContain("Pepper");
-    expect([...tile("bench").querySelectorAll("[data-space-card]")].map((card) => card.getAttribute("data-space-card"))).toEqual(["chief"]);
+    expect([...tile("bench").querySelectorAll("[data-space-card]")].map((card) => card.getAttribute("data-space-card"))).toEqual(["chief", "pepper", "warm"]);
   });
 
   it("lists one Space drag block and every agent with where it is on the shelf", async () => {
@@ -160,11 +160,15 @@ describe("the Spaces map", () => {
     await vi.waitFor(() => expect(calls("/api/space/placements").at(-1)).toEqual({ method: "PUT", body: JSON.stringify({ botId: "pepper", goalId: null }) }));
   });
 
-  it("places multiple threads of the same agent in one Space and opens that thread's conversation on the side when clicked", async () => {
+  it("places multiple threads of the same agent in one Space (or across Spaces) without removing it from the bench, and opens that thread's conversation on the side when clicked", async () => {
     await render();
-    dragTo(host.querySelector('[data-palette-bot="chief"]')!, tile("sup").querySelector("header")!);
-    dragTo(host.querySelector('[data-palette-bot="chief"]')!, tile("sup").querySelector("header")!);
+    const benchChief = () => tile("bench").querySelector('[data-space-card="chief"] [data-bot-id]')!;
+    dragTo(benchChief(), tile("sup").querySelector("header")!);
+    dragTo(benchChief(), tile("sup").querySelector("header")!);
+    dragTo(benchChief(), tile("logo").querySelector("header")!);
+    expect(benchChief()).not.toBeNull();
     await vi.waitFor(() => expect([...tile("sup").querySelectorAll<HTMLElement>('[data-space-card="chief"]')].map((card) => card.dataset.spaceThread)).toEqual(["t-new", "t-new-2"]));
+    await vi.waitFor(() => expect([...tile("logo").querySelectorAll<HTMLElement>('[data-space-card="chief"]')].map((card) => card.dataset.spaceThread)).toEqual(["t-new-3"]));
     const cards = [...tile("sup").querySelectorAll<HTMLElement>('[data-space-card="chief"]')];
     expect(cards[0]!.textContent).toContain("Supplier signed");
     expect(cards[1]!.textContent).toContain("Supplier signed #2");

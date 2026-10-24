@@ -24,11 +24,12 @@ const label = (goal: SpaceGoal) => `${levelWords(goal.level)} Space ${quoted(goa
 
 /** Every Space and who is in it, then the bench: what every bot sees about every other. */
 export function boardLines(space: SpaceState, bots: readonly SpaceBot[], exceptGoalId?: string): string[] {
+  const inGoal = (bot: SpaceBot, goalId: string) =>
+    space.placements[bot.id] === goalId || (bot.tasks ?? []).some((task) => space.threadGoals[task.threadId] === goalId);
   const names = (ids: (bot: SpaceBot) => boolean) => bots.filter(ids).map((bot) => bot.name).join(", ") || "nobody yet";
   const lines = space.goals.filter((goal) => goal.id !== exceptGoalId && goal.status !== "done")
-    .map((goal) => `- ${label(goal)}: ${names((bot) => space.placements[bot.id] === goal.id)}`);
-  const ids = new Set(space.goals.map((goal) => goal.id));
-  const bench = bots.filter((bot) => !ids.has(space.placements[bot.id] ?? ""));
+    .map((goal) => `- ${label(goal)}: ${names((bot) => inGoal(bot, goal.id))}`);
+  const bench = bots.filter((bot) => !space.goals.some((goal) => inGoal(bot, goal.id)));
   if (bench.length) lines.push(`- Bench: ${bench.map((bot) => bot.name).join(", ")}`);
   return lines;
 }
