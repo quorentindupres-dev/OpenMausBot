@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { BotAvatar } from "../Avatar";
 import type { SpaceGoal, SpaceLogEntry } from "../../../shared/space";
 import type { SpaceThread } from "./space-api";
+import { GoalAvatarPicker } from "./GoalAvatarPicker";
 import { LevelChip } from "./LevelChip";
 import { LEVEL_STYLE } from "./space-levels";
 
@@ -37,6 +38,7 @@ function Row({ label, children, testId }: { label: string; children: ReactNode; 
 export type SpaceCardActions = {
   menu(event: MouseEvent, bot?: Bot): void;
   edit(): void;
+  setIcon?(icon: string | null): void;
   toggleOutcome(index: number): void;
   newAgent(name: string): void;
   addTask(text: string, botId?: string): void;
@@ -70,6 +72,7 @@ export function SpaceCard({ goal, bots, allBots, threads, notes, actions, fill =
       className={cn("relative flex min-w-0 flex-col gap-1.5 overflow-y-auto rounded-2xl border bg-panel p-3", fill ? "h-full" : "aspect-square",
         LEVEL_STYLE[goal.level].border, goal.status !== "active" && "opacity-60")}>
       <div className="flex items-center gap-1.5">
+        <GoalAvatarPicker goal={goal} onChange={(icon) => actions.setIcon?.(icon)} />
         <LevelChip level={goal.level} />
         {goal.status !== "active" && <span className="rounded bg-control px-1.5 py-0.5 text-[10.5px] text-ink-secondary">{t(goal.status === "done" ? "quest.status.done" : "quest.status.parked")}</span>}
         <h3 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink" title={goal.title}><bdi dir="auto">{goal.title}</bdi></h3>

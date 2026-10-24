@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from "react";
-import { ArrowRight, Minus, MoreHorizontal, Plus, UserPlus } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from "react";
+import { ArrowRight, Minus, MoreHorizontal, Plus, UserPlus, X } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { CARD_WIDTH, fitTeams, zoomAt, type Point, type View } from "@/lib/team-canvas";
 import { BotCard } from "../TeamCanvas";
-import type { SpaceGoal, SpaceLayout, SpaceState } from "../../../shared/space";
+import { CANVAS_NOTE_COLORS, type CanvasNoteColor, type CanvasNotePatch, type SpaceCanvasNote, type SpaceGoal, type SpaceLayout, type SpaceState } from "../../../shared/space";
+import { GoalAvatarPicker, readImageFileAsDataUrl } from "./GoalAvatarPicker";
 import { LevelChip } from "./LevelChip";
 import { slotBot, spaceSlots, type KnownThread, type SpaceSlot } from "./space-api";
 import type { Drag } from "./space-drag";
@@ -15,10 +16,32 @@ import { BENCH_KEY, layoutSpaces, resizeTile, tileColumns, toCanvas, type Resize
 const GLIDE_MS = 400;
 const iconButton = "flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-control hover:text-ink focus-visible:outline-2 focus-visible:outline-accent";
 
+const NOTE_COLOR_STYLE: Record<CanvasNoteColor, { card: string; dot: string }> = {
+  yellow: { card: "border-warning/40 bg-warning/15", dot: "bg-warning" },
+  blue: { card: "border-accent/40 bg-accent/15", dot: "bg-accent" },
+  green: { card: "border-success/40 bg-success/15", dot: "bg-success" },
+  pink: { card: "border-danger/40 bg-danger/15", dot: "bg-danger" },
+  neutral: { card: "border-hairline/70 bg-card", dot: "bg-ink-secondary" },
+};
+
+function resizeNoteLayout(origin: SpaceLayout, corner: ResizeCorner, dx: number, dy: number): SpaceLayout {
+  const minW = 140;
+  const minH = 100;
+  const rawW = corner.includes("e") ? origin.w + dx : origin.w - dx;
+  const w = Math.min(2000, Math.max(minW, Math.round(rawW)));
+  const rawH = corner.includes("s") ? origin.h + dy : origin.h - dy;
+  const h = Math.min(2000, Math.max(minH, Math.round(rawH)));
+  const x = corner.includes("w") ? Math.round(origin.x + (origin.w - w)) : origin.x;
+  const y = corner.includes("n") ? Math.round(origin.y + (origin.h - h)) : origin.y;
+  return { x, y, w, h };
+}
+
 type Gesture = { id: number; start: Point; view: View; moved: boolean } & (
   | { kind: "pan" }
   | { kind: "tile"; key: string; origin: SpaceTile }
   | { kind: "resize"; key: string; corner: ResizeCorner; origin: SpaceTile; bots: number; side: boolean }
+  | { kind: "note"; noteId: string; origin: SpaceLayout }
+  | { kind: "note-resize"; noteId: string; corner: ResizeCorner; origin: SpaceLayout }
 );
 
 export type SpaceCanvasActions = {
@@ -31,6 +54,9 @@ export type SpaceCanvasActions = {
   newSpaceAt(at: Point): void;
   addAgent(event: ReactMouseEvent, goal: SpaceGoal): void;
   rename(goal: SpaceGoal, title: string): void;
+  setIcon?(goal: SpaceGoal, icon: string | null): void;
+  patchNote?(id: string, patch: CanvasNotePatch): void;
+  deleteNote?(id: string): void;
 };
 
 const NO_KNOWN: Readonly<Record<string, KnownThread>> = {};
@@ -77,6 +103,89 @@ function TitleInput({ goal, onDone }: { goal: SpaceGoal; onDone(title: string | 
     className="min-w-0 flex-1 rounded-md border border-accent/60 bg-app px-2 py-1 text-[13px] font-semibold outline-none" />;
 }
 
+function CanvasNoteCard({ note, layout, actions }: { note: SpaceCanvasNote; layout: SpaceLayout; actions: SpaceCanvasActions }) {
+  const [text, setText] = useState(note.text);
+  const debounceRef = useRef<number | null>(null);
+  const lastSavedRef = useRef(note.text);
+  useEffect(() => {
+    setText(note.text);
+    lastSavedRef.current = note.text;
+  }, [note.text]);
+  useEffect(() => () => { if (debounceRef.current !== null) window.clearTimeout(debounceRef.current); }, []);
+  const flush = (nextText: string) => {
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    if (nextText !== lastSavedRef.current) {
+      lastSavedRef.current = nextText;
+      actions.patchNote?.(note.id, { text: nextText });
+    }
+  };
+  const style = NOTE_COLOR_STYLE[note.color] ?? NOTE_COLOR_STYLE.yellow;
+  return (
+    <article
+      data-canvas-note={note.id}
+      data-note-color={note.color}
+      aria-label={t("quest.note.aria")}
+      style={{ left: layout.x, top: layout.y, width: layout.w, height: layout.h }}
+      className={cn("absolute z-10 flex flex-col overflow-hidden rounded-xl border shadow-md backdrop-blur-sm", style.card)}
+    >
+      <div
+        data-note-handle={note.id}
+        className="flex h-7 shrink-0 cursor-grab items-center justify-between gap-1.5 border-b border-hairline/30 px-2.5 active:cursor-grabbing"
+      >
+        <div className="flex items-center gap-1">
+          {CANVAS_NOTE_COLORS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              data-note-color-pick={color}
+              aria-label={t(`quest.note.color.${color}`)}
+              onClick={(event) => { event.stopPropagation(); actions.patchNote?.(note.id, { color }); }}
+              className={cn(
+                "size-3 rounded-full transition-transform hover:scale-110",
+                NOTE_COLOR_STYLE[color].dot,
+                note.color === color && "ring-2 ring-ink/60",
+              )}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          data-note-delete={note.id}
+          aria-label={t("quest.note.delete")}
+          onClick={(event) => { event.stopPropagation(); actions.deleteNote?.(note.id); }}
+          className="rounded p-0.5 text-ink-secondary hover:bg-control hover:text-ink"
+        >
+          <X size={12} />
+        </button>
+      </div>
+      <textarea
+        data-note-text={note.id}
+        aria-label={t("quest.note.textAria")}
+        placeholder={t("quest.note.placeholder")}
+        value={text}
+        maxLength={2000}
+        onChange={(event) => {
+          const next = event.target.value;
+          setText(next);
+          if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+          debounceRef.current = window.setTimeout(() => flush(next), 350);
+        }}
+        onBlur={(event) => flush(event.currentTarget.value)}
+        className="min-h-0 flex-1 resize-none bg-transparent p-2.5 text-[12.5px] leading-[17px] text-ink outline-none placeholder:text-ink-tertiary"
+      />
+      <span data-note-resize={note.id} data-resize-corner="nw" className="absolute left-0 top-0 z-20 size-3 cursor-nwse-resize" />
+      <span data-note-resize={note.id} data-resize-corner="ne" className="absolute right-0 top-0 z-20 size-3 cursor-nesw-resize" />
+      <span data-note-resize={note.id} data-resize-corner="sw" className="absolute bottom-0 left-0 z-20 size-3 cursor-nesw-resize" />
+      <span data-note-resize={note.id} data-resize-corner="se" className="absolute bottom-0 right-0 z-20 flex size-4 cursor-nwse-resize items-end justify-end p-0.5 text-ink-secondary/50 hover:text-ink">
+        <svg width="8" height="8" viewBox="0 0 10 10" aria-hidden="true"><path d="M9 1L1 9M9 5L5 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+      </span>
+    </article>
+  );
+}
+
 export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat = null, actions, drag, editingTitle, onTitleDone, toCanvasRef, bottomInset = 0 }: {
   space: SpaceState;
   bots: Bot[];
@@ -96,6 +205,7 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
   const suppressClick = useRef(false);
   const [view, setView] = useState<View>({ x: 40, y: 40, scale: 1 });
   const [moved, setMoved] = useState<{ key: string; x: number; y: number; w: number; h: number } | null>(null);
+  const [movedNote, setMovedNote] = useState<{ id: string; layout: SpaceLayout } | null>(null);
   const members = useMemo(() => {
     const groups = new Map<string, SpaceSlot[]>();
     for (const goal of space.goals) groups.set(goal.id, spaceSlots(space, bots, goal.id, knownThreads));
@@ -151,8 +261,26 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
   const start = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !event.isPrimary || gesture.current) return;
     const element = event.target as HTMLElement;
-    if (element.closest("[data-drag-bot], [data-drag-new]")) return;
+    if (element.closest("[data-drag-bot], [data-drag-new], [data-drag-note], [data-drag-new-note]")) return;
     const common = { id: event.pointerId, start: { x: event.clientX, y: event.clientY }, view, moved: false };
+    const noteResize = element.closest<HTMLElement>("[data-note-resize]");
+    if (noteResize?.dataset.noteResize) {
+      const note = (space.canvasNotes ?? []).find((candidate) => candidate.id === noteResize.dataset.noteResize);
+      if (!note) return;
+      const corner = (noteResize.dataset.resizeCorner as ResizeCorner) || "se";
+      gesture.current = { ...common, kind: "note-resize", noteId: note.id, corner, origin: note.layout };
+      suppressClick.current = false;
+      return;
+    }
+    const noteHandle = element.closest<HTMLElement>("[data-note-handle]")?.dataset.noteHandle;
+    if (noteHandle) {
+      if (element.closest("button")) return;
+      const note = (space.canvasNotes ?? []).find((candidate) => candidate.id === noteHandle);
+      if (!note) return;
+      gesture.current = { ...common, kind: "note", noteId: note.id, origin: note.layout };
+      suppressClick.current = false;
+      return;
+    }
     const resize = element.closest<HTMLElement>("[data-tile-resize]");
     if (resize?.dataset.tileResize) {
       const tile = tiles.find((candidate) => candidate.key === resize.dataset.tileResize);
@@ -164,7 +292,7 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
       return;
     }
     const handle = element.closest<HTMLElement>("[data-tile-handle]")?.dataset.tileHandle;
-    if (handle === undefined && element.closest("button, input, select, textarea, a, [data-space-key]")) return;
+    if (handle === undefined && element.closest("button, input, select, textarea, a, [data-space-key], [data-canvas-note]")) return;
     const tile = handle === undefined ? undefined : tiles.find((candidate) => candidate.key === handle);
     gesture.current = tile ? { ...common, kind: "tile", key: tile.key, origin: tile } : { ...common, kind: "pan" };
     suppressClick.current = false;
@@ -180,6 +308,8 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
     if (active.kind === "pan") setView({ ...active.view, x: active.view.x + dx, y: active.view.y + dy });
     if (active.kind === "tile") setMoved({ key: active.key, x: active.origin.x + dx / view.scale, y: active.origin.y + dy / view.scale, w: active.origin.w, h: active.origin.h });
     if (active.kind === "resize") setMoved({ key: active.key, ...resizeTile(active.origin, active.corner, dx / view.scale, dy / view.scale, active.bots, active.side) });
+    if (active.kind === "note") setMovedNote({ id: active.noteId, layout: { ...active.origin, x: Math.round(active.origin.x + dx / view.scale), y: Math.round(active.origin.y + dy / view.scale) } });
+    if (active.kind === "note-resize") setMovedNote({ id: active.noteId, layout: resizeNoteLayout(active.origin, active.corner, dx / view.scale, dy / view.scale) });
   };
   const finish = (event?: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
     const active = gesture.current;
@@ -188,7 +318,25 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
     suppressClick.current = active.moved;
     window.setTimeout(() => { suppressClick.current = false; }, 0);
     if (viewport.current?.hasPointerCapture?.(active.id)) viewport.current.releasePointerCapture(active.id);
-    if (cancelled) { setMoved(null); setView(active.view); return; }
+    if (cancelled) { setMoved(null); setMovedNote(null); setView(active.view); return; }
+    if (active.kind === "note-resize") {
+      if (active.moved && event) {
+        const dx = (event.clientX - active.start.x) / active.view.scale;
+        const dy = (event.clientY - active.start.y) / active.view.scale;
+        actions.patchNote?.(active.noteId, { layout: resizeNoteLayout(active.origin, active.corner, dx, dy) });
+      }
+      setMovedNote(null);
+      return;
+    }
+    if (active.kind === "note") {
+      if (active.moved && event) {
+        const x = Math.round(active.origin.x + (event.clientX - active.start.x) / active.view.scale);
+        const y = Math.round(active.origin.y + (event.clientY - active.start.y) / active.view.scale);
+        actions.patchNote?.(active.noteId, { layout: { ...active.origin, x, y } });
+      }
+      setMovedNote(null);
+      return;
+    }
     if (active.kind === "resize") {
       if (active.moved && event) {
         const dx = (event.clientX - active.start.x) / active.view.scale;
@@ -213,7 +361,7 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
     const bounds = viewport.current?.getBoundingClientRect();
     if (bounds) setView(zoomAt(view, Math.max(0.3, Math.min(1.5, view.scale * factor)), { x: bounds.width / 2, y: bounds.height / 2 }));
   };
-  const emptyCanvas = (target: EventTarget) => !(target as HTMLElement).closest("[data-space-key], button, input");
+  const emptyCanvas = (target: EventTarget) => !(target as HTMLElement).closest("[data-space-key], [data-canvas-note], button, input, textarea");
   const hovered = drag?.target?.kind === "tile" ? drag.target.key : null;
 
   return <div ref={viewport} role="region" aria-label={t("quest.canvas.region")} tabIndex={0} data-space-canvas
@@ -267,13 +415,31 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
             <BotCard bot={cardBot} subtitle={cardSubtitle} selected={isSelected} moving={isMoving} connected={false} onSelect={goal ? () => actions.openCard(slot, goal) : undefined} />
           </div>;
         };
+        const handleTileDrop = (event: ReactDragEvent<HTMLElement>) => {
+          if (!goal) return;
+          const file = event.dataTransfer?.files?.[0];
+          if (!file || !file.type.startsWith("image/")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void readImageFileAsDataUrl(file).then((dataUrl) => {
+            if (dataUrl) actions.setIcon?.(goal, dataUrl);
+          });
+        };
         return <section key={tile.key} data-space-key={tile.key} data-goal-zone={goal?.id} data-level={goal?.level} data-dropping={dropping || undefined}
           aria-label={goal ? t("quest.space.aria", { title }) : t("quest.bench")}
           onContextMenu={(event) => { if (!goal) return; event.preventDefault(); event.stopPropagation(); actions.menu(event, goal); }}
+          onDragOver={(event) => {
+            if (goal && event.dataTransfer?.files?.[0]?.type.startsWith("image/")) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
+          onDrop={handleTileDrop}
           className={cn("absolute flex flex-col overflow-hidden rounded-2xl border bg-panel/90 shadow-sm transition-shadow", style?.border ?? "border-dashed border-hairline/70",
             dropping && "ring-4 ring-accent/40", goal && goal.status !== "active" && "opacity-60")}
           style={{ left: tile.x, top: tile.y, width: tile.w, height: tile.h }}>
           <header className="flex h-16 shrink-0 items-center gap-2 px-5">
+            {goal && <GoalAvatarPicker goal={goal} onChange={(icon) => actions.setIcon?.(goal, icon)} />}
             {goal && <button type="button" data-level-picker={goal.id} aria-label={t("quest.editor.level")}
               onClick={(event) => { event.stopPropagation(); actions.pickLevel(event, goal); }}
               className="shrink-0 rounded focus-visible:outline-2 focus-visible:outline-accent">
@@ -315,6 +481,10 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
             </span>
           </>}
         </section>;
+      })}
+      {(space.canvasNotes ?? []).map((note) => {
+        const layout = movedNote?.id === note.id ? movedNote.layout : note.layout;
+        return <CanvasNoteCard key={note.id} note={note} layout={layout} actions={actions} />;
       })}
     </div>
     <div className="pointer-events-none absolute inset-x-5 bottom-5 flex items-end justify-between gap-3">

@@ -72,6 +72,13 @@ beforeEach(() => {
       return { bot: {}, task: { threadId, title: init?.body ? JSON.parse(init.body).title : undefined } };
     }
     if (path === "/api/space/import-kanban") return { created: 2, updated: 1 };
+    if (path === "/api/space/canvas-notes" && init?.method === "POST") {
+      const body = JSON.parse(init.body!);
+      const note = { id: "cn-1", text: body.text ?? "", color: body.color ?? "yellow", layout: body.layout, createdAt: 1, updatedAt: 1 };
+      const current = fixture.board as ReturnType<typeof board> & { canvasNotes?: unknown[] };
+      fixture.board = { ...current, canvasNotes: [...(current.canvasNotes ?? []), note] };
+      return { note };
+    }
     return {};
   });
   host = document.createElement("div");
@@ -267,5 +274,18 @@ describe("the Spaces map", () => {
     flushSync(() => tile("web").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
     const items = () => [...document.querySelectorAll<HTMLButtonElement>("[data-quest-menu] button")];
     expect(items().map((item) => item.textContent)).toEqual(["Pepper", "Another bot…", "Edit Space"]);
+  });
+
+  it("shows the active plugin badge, creates canvas notes from the toolbar or shelf, and sets a Space goal emoji avatar", async () => {
+    await render();
+    expect(host.querySelector("[data-space-plugin-badge]")?.textContent).toContain("Plugin active");
+    flushSync(() => host.querySelector<HTMLButtonElement>("[data-add-canvas-note]")!.click());
+    await vi.waitFor(() => expect(calls("/api/space/canvas-notes")).toHaveLength(1));
+    await vi.waitFor(() => expect(host.querySelector('[data-canvas-note="cn-1"]')).not.toBeNull());
+
+    flushSync(() => host.querySelector<HTMLButtonElement>('[data-goal-avatar="web"]')!.click());
+    const menu = document.querySelector<HTMLElement>('[data-goal-avatar-menu="web"]')!;
+    flushSync(() => menu.querySelector<HTMLButtonElement>('[data-goal-emoji="🚀"]')!.click());
+    await vi.waitFor(() => expect(calls("/api/space/goals/web")).toEqual([{ method: "PATCH", body: JSON.stringify({ icon: "🚀" }) }]));
   });
 });

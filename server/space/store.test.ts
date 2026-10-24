@@ -133,4 +133,32 @@ describe("the Spaces store", () => {
     expect(createSpaceStore(file).state().visualFirst).toBe(true);
     expect(() => store.setVisualFirst("yes")).toThrow(SpaceInputError);
   });
+
+  it("stores and clears a Space goal's emoji or image icon", () => {
+    const { file, store } = fresh();
+    const goal = store.createGoal({ title: "Website", icon: "🚀" });
+    expect(goal.icon).toBe("🚀");
+    const dataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    expect(store.updateGoal(goal.id, { icon: dataUrl }).icon).toBe(dataUrl);
+    expect(createSpaceStore(file).state().goals[0]!.icon).toBe(dataUrl);
+    expect(store.updateGoal(goal.id, { icon: null }).icon).toBeUndefined();
+    expect(store.updateGoal(goal.id, { icon: "🎯" }).icon).toBe("🎯");
+    expect(store.updateGoal(goal.id, { icon: "" }).icon).toBeUndefined();
+  });
+
+  it("creates, patches, deletes and reloads canvas notes, defaulting missing canvasNotes to []", () => {
+    const { file, store } = fresh();
+    writeFileSync(file, JSON.stringify({ goals: [], placements: {}, threadGoals: {}, log: [], visualFirst: false }));
+    const reloaded = createSpaceStore(file, { now: () => AT });
+    expect(reloaded.state().canvasNotes).toEqual([]);
+    const note = store.addCanvasNote({ text: "Ship v1 today", color: "yellow", layout: { x: 100, y: 120, w: 220, h: 160 } });
+    expect(note).toMatchObject({ text: "Ship v1 today", color: "yellow", layout: { x: 100, y: 120, w: 220, h: 160 }, createdAt: AT, updatedAt: AT });
+    const patched = store.patchCanvasNote(note.id, { text: "Updated note", color: "blue", layout: { x: 140, y: 160, w: 260, h: 180 } });
+    expect(patched).toMatchObject({ id: note.id, text: "Updated note", color: "blue", layout: { x: 140, y: 160, w: 260, h: 180 } });
+    expect(store.patchCanvasNote("missing", { text: "nope" })).toBeNull();
+    expect(createSpaceStore(file).state().canvasNotes).toEqual([patched]);
+    expect(store.deleteCanvasNote(note.id)).toBe(true);
+    expect(store.deleteCanvasNote(note.id)).toBe(false);
+    expect(store.state().canvasNotes).toEqual([]);
+  });
 });

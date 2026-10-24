@@ -16,6 +16,7 @@ export const layoutSchema = z.object({ x: coordinate, y: coordinate, w: z.number
 const spaceFields = {
   title: text(120).min(1),
   goal: text(240),
+  icon: z.string().trim().max(300_000).optional(),
   level: z.enum(SPACE_LEVELS),
   outcomes: z.array(outcomeSchema).max(MAX_OUTCOMES),
   roadmap: z.array(text(160).min(1)).max(MAX_ROADMAP),
@@ -39,7 +40,34 @@ export const goalInputSchema = z.object({
   layout: spaceFields.layout.optional(),
 });
 
-export const goalPatchSchema = z.object(spaceFields).partial().strict();
+export const goalPatchSchema = z.object({
+  ...spaceFields,
+  icon: z.string().trim().max(300_000).nullable(),
+}).partial().strict();
+
+export const CANVAS_NOTE_COLORS = ["yellow", "blue", "green", "pink", "neutral"] as const;
+export const NOTE_COLORS = CANVAS_NOTE_COLORS;
+export type CanvasNoteColor = (typeof CANVAS_NOTE_COLORS)[number];
+export const canvasNoteInputSchema = z.object({
+  text: text(2000).default(""),
+  color: z.enum(CANVAS_NOTE_COLORS).default("yellow"),
+  layout: layoutSchema,
+});
+export const canvasNotePatchSchema = z.object({
+  text: text(2000),
+  color: z.enum(CANVAS_NOTE_COLORS),
+  layout: layoutSchema,
+}).partial().strict();
+export type CanvasNoteInput = z.input<typeof canvasNoteInputSchema>;
+export type CanvasNotePatch = z.input<typeof canvasNotePatchSchema>;
+export interface SpaceCanvasNote {
+  id: string;
+  text: string;
+  color: CanvasNoteColor;
+  layout: SpaceLayout;
+  createdAt: number;
+  updatedAt: number;
+}
 
 const botIdSchema = z.string().regex(/^[\w-]{1,80}$/);
 
@@ -77,6 +105,7 @@ export interface SpaceGoal {
   id: string;
   title: string;
   goal: string;
+  icon?: string;
   level: SpaceLevel;
   outcomes: SpaceOutcome[];
   roadmap: string[];
@@ -113,9 +142,11 @@ export interface SpaceState {
   visualFirst: boolean;
   /** The bench tile's place on the canvas. */
   bench?: SpaceLayout;
+  /** Free-floating sticky/text notes on the canvas. */
+  canvasNotes?: SpaceCanvasNote[];
 }
 
-export const EMPTY_SPACE: SpaceState = { goals: [], placements: {}, threadGoals: {}, log: [], visualFirst: false };
+export const EMPTY_SPACE: SpaceState = { goals: [], placements: {}, threadGoals: {}, log: [], visualFirst: false, canvasNotes: [] };
 
 export function signature(name: string, botId: string | undefined, space: string, at: number): string {
   return `— ${name}${botId ? ` (${botId})` : ""} · ${space} · ${new Date(at).toISOString()}`;
@@ -160,9 +191,23 @@ export function normalizeGoal(raw: LegacyGoal): SpaceGoal {
     asks: Array.isArray(raw.asks) ? raw.asks : [],
     status: raw.status === "done" || raw.status === "parked" ? raw.status : "active",
     sortOrder: typeof raw.sortOrder === "number" ? raw.sortOrder : 0,
+    ...(typeof raw.icon === "string" && raw.icon.trim() ? { icon: raw.icon.trim() } : {}),
     ...(raw.kanbanCard ? { kanbanCard: raw.kanbanCard } : {}),
     ...(raw.jobPath ? { jobPath: raw.jobPath } : {}),
     ...(raw.layout && layoutSchema.safeParse(raw.layout).success ? { layout: raw.layout } : {}),
+    createdAt: typeof raw.createdAt === "number" ? raw.createdAt : 0,
+    updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
+  };
+}
+
+export function normalizeCanvasNote(raw: Partial<SpaceCanvasNote>): SpaceCanvasNote | null {
+  if (!raw || typeof raw.id !== "string" || !raw.layout || !layoutSchema.safeParse(raw.layout).success) return null;
+  const color = CANVAS_NOTE_COLORS.includes(raw.color as CanvasNoteColor) ? (raw.color as CanvasNoteColor) : "yellow";
+  return {
+    id: raw.id,
+    text: typeof raw.text === "string" ? raw.text.slice(0, 2000) : "",
+    color,
+    layout: raw.layout,
     createdAt: typeof raw.createdAt === "number" ? raw.createdAt : 0,
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
   };

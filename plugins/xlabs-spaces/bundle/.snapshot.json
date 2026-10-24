@@ -1,0 +1,27 @@
+{
+  "id": "xlabs-spaces",
+  "version": "1.0.0",
+  "ownedDirs": [
+    "src/components/space",
+    "server/space"
+  ],
+  "ownedFiles": [
+    "shared/space.ts",
+    "server/routes/space.ts",
+    "server/drivers/agents-space-tools.ts"
+  ],
+  "ownedFileCount": 32,
+  "seams": [
+    "server/routes/table.ts",
+    "server/index.ts",
+    "server/system-prompt.ts",
+    "server/drivers/agents-catalog.ts",
+    "server/drivers/agents-call.ts",
+    "server/drivers/agents-mcp-env.ts",
+    "src/components/TeamMapPage.tsx",
+    "src/components/ComputerPanel.tsx",
+    "src/lib/computer-panel-view.ts",
+    "src/components/computer-panel-tabs.ts",
+    "src/locales/en.json"
+  ]
+}

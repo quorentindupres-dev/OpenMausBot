@@ -9,14 +9,15 @@ import { mirrorFromEnv } from "./mirror.ts";
 import { DATA_DIR } from "../config.ts";
 export { bindSpaceBots, spaceBots, type SpaceBot } from "./bots.ts";
 import {
-  EMPTY_SPACE, goalInputSchema, layoutSchema, goalPatchSchema, logInputSchema, normalizeGoal, signature, taskInputSchema, taskPatchSchema,
-  type SpaceAsk, type SpaceGoal, type SpaceLogEntry, type SpaceState, type SpaceTask,
+  canvasNoteInputSchema, canvasNotePatchSchema, EMPTY_SPACE, goalInputSchema, layoutSchema, goalPatchSchema, logInputSchema, normalizeCanvasNote, normalizeGoal, signature, taskInputSchema, taskPatchSchema,
+  type SpaceAsk, type SpaceCanvasNote, type SpaceGoal, type SpaceLogEntry, type SpaceState, type SpaceTask,
 } from "../../shared/space.ts";
 
 const MAX_LOG = 500;
 const MAX_GOALS = 200;
 const MAX_TASKS = 60;
 const MAX_ASKS = 30;
+const MAX_CANVAS_NOTES = 200;
 
 export class SpaceInputError extends Error {
   readonly status: 400 | 404 | 409;
@@ -46,6 +47,9 @@ function readState(file: string): SpaceState {
       log: Array.isArray(raw.log) ? raw.log.map((entry) => ({ ...entry, signature: entry.signature ?? "" })) : [],
       visualFirst: raw.visualFirst === true,
       ...(raw.bench && layoutSchema.safeParse(raw.bench).success ? { bench: raw.bench } : {}),
+      canvasNotes: Array.isArray(raw.canvasNotes)
+        ? raw.canvasNotes.map(normalizeCanvasNote).filter((note): note is SpaceCanvasNote => note !== null)
+        : [],
     };
   } catch {
     return structuredClone(EMPTY_SPACE);
@@ -98,12 +102,14 @@ export function createSpaceStore(file: string, options: { now?: () => number; sa
       return current().goals.find((candidate) => candidate.id === id);
     },
     createGoal(body: unknown): SpaceGoal {
-      const input = parsed(goalInputSchema, body);
+      const { icon, ...input } = parsed(goalInputSchema, body);
       const all = current();
       if (all.goals.length >= MAX_GOALS) throw new SpaceInputError(409, "too many Spaces");
       const at = now();
       const created: SpaceGoal = {
-        ...input, tasks: [], asks: [],
+        ...input,
+        ...(icon ? { icon } : {}),
+        tasks: [], asks: [],
         id: randomUUID(),
         sortOrder: input.sortOrder ?? Math.max(0, ...all.goals.map((candidate) => candidate.sortOrder + 1)),
         createdAt: at,
@@ -113,8 +119,14 @@ export function createSpaceStore(file: string, options: { now?: () => number; sa
       return created;
     },
     updateGoal(id: string, body: unknown): SpaceGoal {
-      const patch = parsed(goalPatchSchema, body);
-      return replace({ ...goal(id), ...patch });
+      const { icon, ...patch } = parsed(goalPatchSchema, body);
+      const existing = goal(id);
+      const { icon: _oldIcon, ...withoutIcon } = existing;
+      return replace({
+        ...(icon === null || icon === "" ? withoutIcon : existing),
+        ...patch,
+        ...(typeof icon === "string" && icon ? { icon } : {}),
+      });
     },
     deleteGoal(id: string): void {
       goal(id);
@@ -208,6 +220,33 @@ export function createSpaceStore(file: string, options: { now?: () => number; sa
     setVisualFirst(on: unknown): boolean {
       if (typeof on !== "boolean") throw new SpaceInputError(400, "visualFirst must be true or false");
       return save({ ...current(), visualFirst: on }).visualFirst;
+    },
+    addCanvasNote(body: unknown): SpaceCanvasNote {
+      const input = parsed(canvasNoteInputSchema, body);
+      const all = current();
+      const list = all.canvasNotes ?? [];
+      if (list.length >= MAX_CANVAS_NOTES) throw new SpaceInputError(409, "too many canvas notes");
+      const at = now();
+      const note: SpaceCanvasNote = { id: randomUUID(), text: input.text, color: input.color, layout: input.layout, createdAt: at, updatedAt: at };
+      save({ ...all, canvasNotes: [...list, note] });
+      return note;
+    },
+    patchCanvasNote(id: string, body: unknown): SpaceCanvasNote | null {
+      const patch = parsed(canvasNotePatchSchema, body);
+      const all = current();
+      const list = all.canvasNotes ?? [];
+      const existing = list.find((candidate) => candidate.id === id);
+      if (!existing) return null;
+      const updated: SpaceCanvasNote = { ...existing, ...patch, updatedAt: now() };
+      save({ ...all, canvasNotes: list.map((candidate) => candidate.id === id ? updated : candidate) });
+      return updated;
+    },
+    deleteCanvasNote(id: string): boolean {
+      const all = current();
+      const list = all.canvasNotes ?? [];
+      if (!list.some((candidate) => candidate.id === id)) return false;
+      save({ ...all, canvasNotes: list.filter((candidate) => candidate.id !== id) });
+      return true;
     },
     /** Adds Spaces, or fills the ones already linked to a card; never removes what is there. */
     importCards(cards: ReadonlyArray<{ card: string; title: string; roadmap: string[]; tasks: string[] }>): { created: number; updated: number } {

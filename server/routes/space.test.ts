@@ -108,4 +108,38 @@ describe("the Spaces routes", () => {
     expect((await call(base, "PATCH", "/api/space/settings", { visualFirst: "yes" })).status).toBe(400);
     expect((await call(base, "GET", "/api/space/nothing")).status).toBe(404);
   });
+
+  it("supports goal icons, canvas notes CRUD, and plugin metadata route", async () => {
+    const { base } = await serve();
+    expect(await call(base, "GET", "/api/space/plugin")).toEqual({
+      status: 200,
+      body: { ok: true, id: "xlabs-spaces", version: "1.0.0" },
+    });
+    const goal = (await call(base, "POST", "/api/space/goals", { title: "Ads", icon: "🔥" })).body.goal;
+    expect(goal.icon).toBe("🔥");
+    const patchedGoal = (await call(base, "PATCH", `/api/space/goals/${goal.id}`, { icon: null })).body.goal;
+    expect(patchedGoal.icon).toBeUndefined();
+
+    const createdNote = await call(base, "POST", "/api/space/canvas-notes", {
+      text: "Check ROAS",
+      color: "green",
+      layout: { x: 200, y: 150, w: 220, h: 160 },
+    });
+    expect(createdNote.status).toBe(201);
+    expect(createdNote.body.note).toMatchObject({
+      text: "Check ROAS",
+      color: "green",
+      layout: { x: 200, y: 150, w: 220, h: 160 },
+    });
+    const noteId = createdNote.body.note.id as string;
+    const updatedNote = await call(base, "PATCH", `/api/space/canvas-notes/${noteId}`, {
+      text: "ROAS > 2.5",
+      color: "pink",
+    });
+    expect(updatedNote.status).toBe(200);
+    expect(updatedNote.body.note).toMatchObject({ id: noteId, text: "ROAS > 2.5", color: "pink" });
+    expect((await call(base, "PATCH", "/api/space/canvas-notes/missing", { text: "x" })).status).toBe(404);
+    expect((await call(base, "DELETE", `/api/space/canvas-notes/${noteId}`)).status).toBe(200);
+    expect((await call(base, "DELETE", `/api/space/canvas-notes/${noteId}`)).status).toBe(404);
+  });
 });

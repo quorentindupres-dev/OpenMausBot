@@ -35,6 +35,18 @@ export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
   ],
 };
 
+export const ANTIGRAVITY_ARGON_OPTIONS: ModelCatalog["options"] = [
+  { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)" },
+  { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
+  { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)" },
+];
+
+export function withAntigravityArgonModels(catalog: ModelCatalog): ModelCatalog {
+  const seen = new Set(catalog.options.map((option) => option.id));
+  const extra = ANTIGRAVITY_ARGON_OPTIONS.filter((option) => !seen.has(option.id));
+  return extra.length ? { default: catalog.default, options: [...extra, ...catalog.options] } : catalog;
+}
+
 /** Antigravity's session modes: `yolo` for Full, `auto_edit` for auto-accept edits, `default` otherwise (it has no reviewer for Auto). */
 export function antigravityPermissionMode(fullAuto: boolean, approvalMode?: ApprovalMode): "yolo" | "auto_edit" | "default" {
   if (fullAuto || approvalMode === "full") return "yolo";
@@ -60,6 +72,15 @@ const support: AcpSupport = {
   images: true,
   spawnArgs: () => [],
   selectModel: { configId: "model" },
+  fallbackModel: (sessionConfig, catalogDefault) => {
+    const modelOpt = Array.isArray((sessionConfig as any)?.configOptions)
+      ? (sessionConfig as any).configOptions.find((o: any) => o?.id === "model")
+      : undefined;
+    const offered: string[] = Array.isArray(modelOpt?.options)
+      ? modelOpt.options.map((o: any) => o?.value).filter((v: unknown): v is string => typeof v === "string")
+      : [];
+    return catalogDefault && offered.includes(catalogDefault) ? catalogDefault : null;
+  },
   // Google's server reads its new-session default from this variable (agy_acp_server 1.1.1
   // model_selection.get_default_model_id); a later switch re-fetches the model list (1.3-1.8 s).
   sessionModelEnv: "AGY_ACP_DEFAULT_MODEL",
@@ -139,6 +160,7 @@ const AcpAntigravityDriver = createAcpDriver(support);
 
 export const AntigravityDriver: ProviderDriver<AcpConfig> = {
   ...AcpAntigravityDriver,
+  models: withAntigravityArgonModels(STATIC_ANTIGRAVITY_MODELS),
   async create(input: DriverCreateInput<AcpConfig>): Promise<ProviderInstance> {
     const base = await AcpAntigravityDriver.create(input);
     scheduleAntigravityTempSweep(input.instanceId);
@@ -159,7 +181,7 @@ export const AntigravityDriver: ProviderDriver<AcpConfig> = {
     return {
       ...base,
       get models() {
-        return base.models;
+        return withAntigravityArgonModels(base.models);
       },
       snapshot: async () => {
         const snapshot = await base.snapshot();

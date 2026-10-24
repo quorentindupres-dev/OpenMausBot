@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Plus, Search, StickyNote } from "lucide-react";
 import type { Bot } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
@@ -33,6 +33,11 @@ export function SpacePalette({ space, bots, knownThreads = {}, benchHint }: { sp
       className={cn(ITEM, "border border-hairline/60 bg-card")}>
       <Plus size={14} className="shrink-0 text-ink-secondary" />
       <span className="font-medium">{t("quest.newQuest")}</span>
+    </div>
+    <div data-drag-note="note" data-drag-new-note="note" role="button" tabIndex={-1} title={t("quest.palette.dragNote")}
+      className={cn(ITEM, "border border-hairline/60 bg-card")}>
+      <StickyNote size={14} className="shrink-0 text-ink-secondary" />
+      <span className="font-medium">{t("quest.newNote")}</span>
     </div>
     <div className="flex items-center justify-between">
       <h2 className="text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">{t("quest.palette.agents")}</h2>

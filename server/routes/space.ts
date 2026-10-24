@@ -42,6 +42,8 @@ export function createSpaceRoutes(deps: Partial<SpaceRouteDeps> = {}): RouteHand
         return json(res, 200, { visualFirst: space.setVisualFirst(input?.visualFirst) });
       }
       if (path === "/api/space/scan" && method === "GET") return json(res, 200, { text: chiefScanText(space.state(), bots()) });
+      if (path === "/api/space/plugin" && method === "GET") return json(res, 200, { ok: true, id: "xlabs-spaces", version: "1.0.0" });
+      if (path === "/api/space/canvas-notes" && method === "POST") return json(res, 201, { note: space.addCanvasNote(await body()) });
       if (path === "/api/space/import-kanban" && method === "POST") {
         const bin = kanban();
         if (!bin) return json(res, 404, { error: "Kanban import is off: OMB_KANBAN_BIN is not set" });
@@ -72,6 +74,14 @@ export function createSpaceRoutes(deps: Partial<SpaceRouteDeps> = {}): RouteHand
       if (m && method === "PUT") {
         const input = (await body()) as { goalId?: unknown } | null;
         return json(res, 200, { threadGoals: space.linkThread(m[1], input?.goalId) });
+      }
+      m = path.match(/^\/api\/space\/canvas-notes\/([\w-]+)$/);
+      if (m && method === "PATCH") {
+        const note = space.patchCanvasNote(m[1], await body());
+        return note ? json(res, 200, { note }) : json(res, 404, { error: "no such canvas note" });
+      }
+      if (m && method === "DELETE") {
+        return space.deleteCanvasNote(m[1]) ? json(res, 200, { ok: true }) : json(res, 404, { error: "no such canvas note" });
       }
       return json(res, 404, { error: "no such Space route" });
     });

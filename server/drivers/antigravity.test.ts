@@ -35,9 +35,11 @@ import { installAntigravityRuntime, resolveAntigravityRuntime } from "./antigrav
 import * as antigravityTemp from "./antigravity-temp.ts";
 import { VERIFICATION_TEMP_KEY, antigravityTempDir, sweepAntigravityTemp } from "./antigravity-temp.ts";
 import {
+  ANTIGRAVITY_ARGON_OPTIONS,
   AntigravityDriver,
   STATIC_ANTIGRAVITY_MODELS,
   antigravityPermissionMode,
+  withAntigravityArgonModels,
 } from "./antigravity.ts";
 
 const FAKE_ACP = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-acp-cli.ts");
@@ -81,6 +83,39 @@ describe("official Antigravity catalog", () => {
         { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" },
       ],
     });
+  });
+
+  it("exposes Gemini 4 Argon (High/Medium/Low) in the driver and instance catalog without duplicates", async () => {
+    expect(ANTIGRAVITY_ARGON_OPTIONS.map((o) => o.id)).toEqual([
+      "gemini-4-argon-high",
+      "gemini-4-argon-medium",
+      "gemini-4-argon-low",
+    ]);
+    const merged = withAntigravityArgonModels(STATIC_ANTIGRAVITY_MODELS);
+    expect(merged.default).toBe("gemini-3.8-flash-high");
+    expect(merged.options.map((o) => o.id)).toEqual([
+      "gemini-4-argon-high",
+      "gemini-4-argon-medium",
+      "gemini-4-argon-low",
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low",
+    ]);
+    expect(withAntigravityArgonModels(merged)).toEqual(merged);
+    const instance = await AntigravityDriver.create({
+      instanceId: "argon-check",
+      displayName: "Antigravity",
+      enabled: true,
+      config: { cli: "agy", fullAuto: false },
+      environment: {},
+    });
+    try {
+      expect(instance.models.options.map((o) => o.id)).toContain("gemini-4-argon-high");
+      expect(instance.models.options.map((o) => o.id)).toContain("gemini-4-argon-medium");
+      expect(instance.models.options.map((o) => o.id)).toContain("gemini-4-argon-low");
+    } finally {
+      await instance.dispose();
+    }
   });
 
   it("reads the authenticated account catalog from ACP config options", () => {

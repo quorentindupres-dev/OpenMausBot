@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Bot } from "@/state/store";
-import { EMPTY_SPACE, type GoalInput, type GoalPatch, type SpaceGoal, type SpaceLayout, type SpaceState } from "../../../shared/space";
+import {
+  EMPTY_SPACE,
+  type CanvasNoteInput,
+  type CanvasNotePatch,
+  type GoalInput,
+  type GoalPatch,
+  type SpaceCanvasNote,
+  type SpaceGoal,
+  type SpaceLayout,
+  type SpaceState,
+} from "../../../shared/space";
 
 const POLL_MS = 3_000;
 
@@ -45,6 +55,10 @@ export const patchTask = (goalId: string, taskId: string, patch: { text?: string
 export const deleteTask = (goalId: string, taskId: string) => api(`${goalPath(goalId)}/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 export const answerAsk = (goalId: string, askId: string, answer: "yes" | "no") => api(`${goalPath(goalId)}/asks/${encodeURIComponent(askId)}`, json("POST", { answer }));
 export const importKanban = () => api<{ created: number; updated: number }>("/api/space/import-kanban", { method: "POST" });
+const canvasNotePath = (id: string) => `/api/space/canvas-notes/${encodeURIComponent(id)}`;
+export const createCanvasNote = (input: CanvasNoteInput) => api<{ note: SpaceCanvasNote }>("/api/space/canvas-notes", json("POST", input));
+export const updateCanvasNote = (id: string, patch: CanvasNotePatch) => api<{ note: SpaceCanvasNote }>(canvasNotePath(id), json("PATCH", patch));
+export const deleteCanvasNote = (id: string) => api<{ ok: boolean }>(canvasNotePath(id), { method: "DELETE" });
 
 /** Opens a new thread for `botId`, titled after the Space and linked to it, and returns the created thread and updated bot. */
 export async function createGoalThread(botId: string, goal: SpaceGoal, title: string = goal.title): Promise<{ threadId: string; bot?: Bot; title: string }> {

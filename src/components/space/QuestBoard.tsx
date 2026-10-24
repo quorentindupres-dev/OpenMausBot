@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { Download, Plus, ScanSearch, X } from "lucide-react";
+import { Download, Plus, ScanSearch, StickyNote, X } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
@@ -19,9 +19,9 @@ import { BENCH_KEY, tileSize } from "./space-layout";
 import { LEVEL_STYLE } from "./space-levels";
 import { ZoneContextMenu, type ZoneMenuTarget } from "./ZoneContextMenu";
 import {
-  addTask, answerAsk, askChiefToScan, createGoal, createGoalThread, deleteTask, importKanban, linkThread, loadThread,
+  addTask, answerAsk, askChiefToScan, createCanvasNote, createGoal, createGoalThread, deleteCanvasNote, deleteTask, importKanban, linkThread, loadThread,
   newAgentInSpace, patchTask, placeBot, setBench, setVisualFirst,
-  spaceSlots, spaceThreads, updateGoal, useSpace, zoneBots, type BoardState, type KnownThread, type SpaceSlot,
+  spaceSlots, spaceThreads, updateCanvasNote, updateGoal, useSpace, zoneBots, type BoardState, type KnownThread, type SpaceSlot,
 } from "./space-api";
 import { showQuestBoard, useQuestBoard } from "./space-ui-state";
 
@@ -225,6 +225,30 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
         .catch(fail);
     }
   };
+  const addCanvasNoteAt = (at?: Point) => {
+    const count = space.canvasNotes?.length ?? 0;
+    const layout: SpaceLayout = at
+      ? { x: Math.round(at.x - 110), y: Math.round(at.y - 24), w: 220, h: 150 }
+      : { x: 120 + (count * 28) % 280, y: 120 + (count * 24) % 200, w: 220, h: 150 };
+    setError(null);
+    void createCanvasNote({ text: "", color: "yellow", layout })
+      .then(({ note }) => {
+        if (note) setSpace((prev) => ({ ...prev, canvasNotes: [...(prev.canvasNotes ?? []), note] }));
+      })
+      .catch(fail)
+      .finally(() => void refresh());
+  };
+  const setGoalIcon = (goal: SpaceGoal, icon: string | null) => {
+    setSpace((prev) => ({
+      ...prev,
+      goals: prev.goals.map((candidate) => {
+        if (candidate.id !== goal.id) return candidate;
+        const { icon: _old, ...rest } = candidate;
+        return icon ? { ...rest, icon } : rest;
+      }),
+    }));
+    act(updateGoal(goal.id, { icon }));
+  };
   const dropped = (item: DragItem, target: DropTarget, at: Point) => {
     if (item.kind === "bot") {
       if (target?.kind === "tile") moveCard(item.botId, item.threadId, item.fromGoalId, target.key === BENCH_KEY ? null : target.key);
@@ -233,6 +257,10 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
     }
     if (target?.kind !== "canvas" && target?.kind !== "tile") return;
     const point = toCanvasRef.current?.(at) ?? at;
+    if (item.kind === "note") {
+      addCanvasNoteAt(point);
+      return;
+    }
     const size = tileSize(0, item.level === "side");
     setError(null);
     void createGoal({ title: t("quest.canvas.untitled"), level: item.level, layout: { x: point.x - size.w / 2, y: point.y - 32, ...size } })
@@ -244,6 +272,7 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
   const cardActions = (goal: SpaceGoal): SpaceCardActions => ({
     menu: (event: MouseEvent, bot?: Bot) => setMenu({ kind: "space", x: event.clientX, y: event.clientY, goal, ...(bot ? { bot } : {}) }),
     edit: () => setEditing({ goal }),
+    setIcon: (icon) => setGoalIcon(goal, icon),
     toggleOutcome: (index) => act(updateGoal(goal.id, { outcomes: goal.outcomes.map((outcome, at) => at === index ? { ...outcome, done: !outcome.done } : outcome) })),
     newAgent: (name) => newAgent(name, goal),
     addTask: (text, botId) => act(addTask(goal.id, text, botId)),
@@ -277,6 +306,21 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
       setSpace({ ...space, goals: space.goals.map((candidate) => candidate.id === goal.id ? { ...candidate, title } : candidate) });
       act(updateGoal(goal.id, { title }));
     },
+    setIcon: setGoalIcon,
+    patchNote: (id, patch) => {
+      setSpace((prev) => ({
+        ...prev,
+        canvasNotes: (prev.canvasNotes ?? []).map((note) => note.id === id ? { ...note, ...patch } : note),
+      }));
+      act(updateCanvasNote(id, patch));
+    },
+    deleteNote: (id) => {
+      setSpace((prev) => ({
+        ...prev,
+        canvasNotes: (prev.canvasNotes ?? []).filter((note) => note.id !== id),
+      }));
+      act(deleteCanvasNote(id));
+    },
   };
   const shownError = error || loadError;
   const draggedBot = drag?.item.kind === "bot" ? bots.find((bot) => drag.item.kind === "bot" && bot.id === drag.item.botId) : undefined;
@@ -298,6 +342,7 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-quest-board onPointerDown={(event) => { begin(event); }}>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-hairline/40 px-6 py-3">
         <button type="button" onClick={() => setEditing({ level: "general" })} className={BUTTON}><Plus size={14} />{t("quest.newQuest")}</button>
+        <button type="button" data-add-canvas-note onClick={() => addCanvasNoteAt()} className={BUTTON}><StickyNote size={14} />{t("quest.newNote")}</button>
         <button type="button" disabled={!chief} title={chief ? undefined : t("quest.scanNoChief")} className={BUTTON} onClick={() => {
           if (!chief) return;
           setError(null);
@@ -307,6 +352,10 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
           setError(null);
           void importKanban().then((result) => setNotice(t("quest.importDone", { created: result.created, updated: result.updated }))).catch(fail).finally(() => void refresh());
         }}><Download size={14} />{t("quest.import")}</button>}
+        <span data-space-plugin-badge className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 text-[11px] font-medium text-ink-secondary">
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-success" />
+          {t("quest.pluginActive")}
+        </span>
         <label className="ml-auto flex cursor-pointer items-center gap-2 text-[12px] text-ink-secondary" title={t("quest.visualFirstHint")}>
           <input type="checkbox" checked={space.visualFirst} onChange={(event) => {
             const on = event.target.checked;
@@ -352,11 +401,14 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
         <div data-space-ghost className="pointer-events-none fixed z-[60] rounded-xl border border-accent/50 bg-card px-3 py-2 text-[13px] shadow-xl" style={{ left: drag.point.x + 14, top: drag.point.y + 14 }}>
           {drag.item.kind === "space"
             ? <span className="flex items-center gap-2"><LevelChip level={drag.item.level} />{t("quest.canvas.untitled")}</span>
-            : <span className="flex items-center gap-2">{draggedBot && <span aria-hidden="true"><BotAvatar bot={draggedBot} size={22} motion="none" motionKey={0} animated={false} /></span>}{draggedBot?.name}</span>}
+            : drag.item.kind === "note"
+              ? <span className="flex items-center gap-2"><StickyNote size={15} />{t("quest.newNote")}</span>
+              : <span className="flex items-center gap-2">{draggedBot && <span aria-hidden="true"><BotAvatar bot={draggedBot} size={22} motion="none" motionKey={0} animated={false} /></span>}{draggedBot?.name}</span>}
           <p className="mt-0.5 text-[10.5px] text-ink-secondary">
             {drag.item.kind === "space" ? (drag.target?.kind === "canvas" || drag.target?.kind === "tile" ? t("quest.drag.dropSpace") : t("quest.drag.onMap"))
-              : targetTitle ? (drag.item.fromGoalId ? t("quest.canvas.moveTo", { title: targetTitle }) : `${t("quest.menu.newThreadHere")} · ${targetTitle}`)
-                : benchTarget ? t("quest.drag.toBench") : t("quest.drag.onMap")}
+              : drag.item.kind === "note" ? (drag.target?.kind === "canvas" || drag.target?.kind === "tile" ? t("quest.drag.dropNote") : t("quest.drag.onMap"))
+                : targetTitle ? (drag.item.fromGoalId ? t("quest.canvas.moveTo", { title: targetTitle }) : `${t("quest.menu.newThreadHere")} · ${targetTitle}`)
+                  : benchTarget ? t("quest.drag.toBench") : t("quest.drag.onMap")}
           </p>
         </div>,
         document.body,
@@ -367,6 +419,7 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
       {menu?.kind === "canvas" && <PointMenu x={menu.x} y={menu.y} label={t("quest.canvas.menu")} onClose={closeMenu}>
         <MenuItem onClick={() => { setEditing({ level: "general", at: menu.at }); setMenu(null); }}><Plus size={14} />{t("quest.canvas.newHere")}</MenuItem>
         <MenuItem onClick={() => { setEditing({ level: "side", at: menu.at }); setMenu(null); }}><Plus size={14} />{t("quest.canvas.newSideHere")}</MenuItem>
+        <MenuItem onClick={() => { addCanvasNoteAt(menu.at); setMenu(null); }}><StickyNote size={14} />{t("quest.canvas.newNoteHere")}</MenuItem>
       </PointMenu>}
       {menu?.kind === "agent" && <AddAgentMenu x={menu.x} y={menu.y} title={menu.goal.title} bots={bots}
         onPick={(bot) => { spawnThreadInSpace(bot.id, menu.goal); setMenu(null); }} onCreate={(name) => { newAgent(name, menu.goal); setMenu(null); }} onClose={closeMenu} />}

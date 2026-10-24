@@ -156,6 +156,38 @@ describe("Settings → Engines → setup cards", () => {
     expect(renderToStaticMarkup(createElement(EnginesSettings))).toContain(">Remove<");
   });
 
+  it("renders added Antigravity child accounts inside the primary Antigravity card with Sign in with Google and Remove", () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", { userAgent: "Linux" });
+    fixture.bots = [];
+    fixture.instances = [
+      {
+        instanceId: "antigravity",
+        driverKind: "antigravityAgent",
+        displayName: "Google Gemini (Antigravity)",
+        cliDefault: "agy",
+        snapshot: { state: "available", authenticated: true, account: { email: "primary@example.test" } },
+        models: { default: "gemini-3.8-flash-high", options: [] },
+      },
+      {
+        instanceId: "antigravity-ultra",
+        driverKind: "antigravityAgent",
+        displayName: "Ultra",
+        cliDefault: "agy",
+        snapshot: { state: "available", authenticated: false },
+        models: { default: "gemini-4-argon-high", options: [] },
+      },
+    ];
+    const html = renderToStaticMarkup(createElement(EnginesSettings));
+    expect(html.match(/data-engine-card=/g)).toHaveLength(1);
+    expect(html).toContain('data-engine-card="antigravity"');
+    expect(html).toContain('data-antigravity-account="antigravity-ultra"');
+    expect(html).toContain("primary@example.test");
+    expect(html).toContain("Ultra");
+    expect(html).toContain("Sign in with Google");
+    expect(html).toContain(">Remove<");
+  });
+
   it("shows every Company provider as read-only while preserving personal controls", () => {
     vi.stubGlobal("window", {});
     fixture.bots = [];

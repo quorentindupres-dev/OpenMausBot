@@ -1,0 +1,249 @@
+{
+  "id": "xlabs-spaces",
+  "name": "X-Labs Spaces & AGY Plugin",
+  "version": "1.0.0",
+  "ownedDirs": [
+    "src/components/space",
+    "server/space"
+  ],
+  "ownedFiles": [
+    "shared/space.ts",
+    "server/routes/space.ts",
+    "server/drivers/agents-space-tools.ts"
+  ],
+  "seams": [
+    {
+      "file": "server/routes/table.ts",
+      "marker": "spaceRoutes",
+      "description": "Mount /api/space/* routes in the authenticated HTTP route table",
+      "patches": [
+        {
+          "find": "import { ownMcpHttpRoutes } from \"./own-mcp-http.ts\";",
+          "replace": "import { ownMcpHttpRoutes } from \"./own-mcp-http.ts\";\nimport { spaceRoutes } from \"./space.ts\";",
+          "check": "from \"./space.ts\""
+        },
+        {
+          "find": "export const ROUTES: RouteHandler[] = [cloudSyncRoutes, ownMcpHttpRoutes];",
+          "replace": "export const ROUTES: RouteHandler[] = [cloudSyncRoutes, ownMcpHttpRoutes, spaceRoutes];",
+          "check": "spaceRoutes]"
+        }
+      ]
+    },
+    {
+      "file": "server/index.ts",
+      "marker": "xlabsParts",
+      "description": "Wire Space store, OMB_SPACE env flag, system prompt parts, and internal Space routes in server/index.ts",
+      "patches": [
+        {
+          "find": "import { pickBotName } from \"./names.ts\";",
+          "replace": "import { pickBotName } from \"./names.ts\"; import { xlabsParts } from \"./space/prompt.ts\"; import { bindSpaceBots, spaceStore } from \"./space/store.ts\"; import { createSpaceInternalRoutes } from \"./routes/space.ts\";",
+          "check": "import { xlabsParts } from \"./space/prompt.ts\""
+        },
+        {
+          "find": "OMB_ESCALATIONS: chiefEscalationsEnabled(cfg) ? \"1\" : \"0\",",
+          "replace": "OMB_ESCALATIONS: chiefEscalationsEnabled(cfg) ? \"1\" : \"0\", OMB_SPACE: spaceStore().state().goals.length > 0 ? \"1\" : \"0\",",
+          "check": "OMB_SPACE: spaceStore()"
+        },
+        {
+          "find": "  () => appLanguage() ?? Intl.DateTimeFormat().resolvedOptions().locale,\n);",
+          "replace": "  () => appLanguage() ?? Intl.DateTimeFormat().resolvedOptions().locale,\n); bindSpaceBots(() => store.bots);",
+          "check": "bindSpaceBots(() => store.bots)"
+        },
+        {
+          "find": "{ id: \"skills\", label: \"Skills index\", text: privateWorkspace ? skillsHost.skillsIndex(bot, undefined, instance) : \"\" },",
+          "replace": "{ id: \"skills\", label: \"Skills index\", text: privateWorkspace ? skillsHost.skillsIndex(bot, undefined, instance) : \"\" }, ...xlabsParts({ botId: bot.id, bots: store.bots, pages: agentsMounted }),",
+          "check": "...xlabsParts({ botId: bot.id, bots: store.bots, pages: agentsMounted })"
+        },
+        {
+          "find": "{ id: \"playbooks\", label: \"Playbooks\", text: packagePlaybooks },",
+          "replace": "{ id: \"playbooks\", label: \"Playbooks\", text: packagePlaybooks }, ...xlabsParts({ botId: bot.id, threadId, bots: store.bots, pages: Boolean(integrations.agents) }),",
+          "check": "...xlabsParts({ botId: bot.id, threadId, bots: store.bots, pages: Boolean(integrations.agents) })"
+        },
+        {
+          "find": "}), createToolTimingRoute(usageTrace, internalCapability.threadId)], { req, res, url, path, method, auth, json, readBody })) return;",
+          "replace": "}), createToolTimingRoute(usageTrace, internalCapability.threadId), createSpaceInternalRoutes({ from: internalSender, threadId: internalCapability.threadId })], { req, res, url, path, method, auth, json, readBody })) return;",
+          "check": "createSpaceInternalRoutes({ from: internalSender"
+        }
+      ]
+    },
+    {
+      "file": "server/system-prompt.ts",
+      "marker": "\"space\"",
+      "description": "Mark the space prompt section as volatile in VOLATILE_SECTIONS",
+      "patches": [
+        {
+          "find": "\"plan\", \"assignment\", \"routine-execution\", \"skill-instructions\", \"playbooks\"]);",
+          "replace": "\"plan\", \"assignment\", \"routine-execution\", \"skill-instructions\", \"playbooks\", \"space\"]);",
+          "check": "\"playbooks\", \"space\""
+        }
+      ]
+    },
+    {
+      "file": "server/drivers/agents-catalog.ts",
+      "marker": "SPACE_TOOL_DEFINITIONS",
+      "description": "Register space_status and space_note in the agents tool catalog when OMB_SPACE=1",
+      "patches": [
+        {
+          "find": "import { RESEARCH_TOOL_DEFINITIONS, RESEARCH_TOOL_NAMES } from \"./agents-research-tools.ts\";",
+          "replace": "import { RESEARCH_TOOL_DEFINITIONS, RESEARCH_TOOL_NAMES } from \"./agents-research-tools.ts\"; import { SPACE_TOOL_DEFINITIONS, SPACE_TOOL_NAMES } from \"./agents-space-tools.ts\";",
+          "check": "SPACE_TOOL_DEFINITIONS"
+        },
+        {
+          "find": "  escalations?: boolean;",
+          "replace": "  escalations?: boolean; /** The person's Spaces board has a Space: space_status and space_note are mounted. */ space?: boolean;",
+          "check": "space?: boolean;"
+        },
+        {
+          "find": "    escalations: env.OMB_ESCALATIONS === \"1\",",
+          "replace": "    escalations: env.OMB_ESCALATIONS === \"1\", space: env.OMB_SPACE === \"1\",",
+          "check": "space: env.OMB_SPACE === \"1\""
+        },
+        {
+          "find": "  ...RESEARCH_TOOL_DEFINITIONS, ...HELPER_TOOL_DEFINITIONS,",
+          "replace": "  ...RESEARCH_TOOL_DEFINITIONS, ...HELPER_TOOL_DEFINITIONS, ...SPACE_TOOL_DEFINITIONS,",
+          "check": "...SPACE_TOOL_DEFINITIONS"
+        },
+        {
+          "find": "    (profile.escalations === true || tool.name !== \"raise_escalation\"));",
+          "replace": "    (profile.escalations === true || tool.name !== \"raise_escalation\") && (profile.space === true || !SPACE_TOOL_NAMES.has(tool.name)));",
+          "check": "!SPACE_TOOL_NAMES.has(tool.name)"
+        }
+      ]
+    },
+    {
+      "file": "server/drivers/agents-call.ts",
+      "marker": "callSpaceTool",
+      "description": "Dispatch space_status and space_note tool calls to callSpaceTool",
+      "patches": [
+        {
+          "find": "import { callHelperTool, HELPER_TOOL_NAMES } from \"./agents-helper-tools.ts\";",
+          "replace": "import { callHelperTool, HELPER_TOOL_NAMES } from \"./agents-helper-tools.ts\"; import { callSpaceTool, SPACE_TOOL_NAMES } from \"./agents-space-tools.ts\";",
+          "check": "import { callSpaceTool"
+        },
+        {
+          "find": "  if (HELPER_TOOL_NAMES.has(name)) return callHelperTool(name, args, context);",
+          "replace": "  if (HELPER_TOOL_NAMES.has(name)) return callHelperTool(name, args, context); if (SPACE_TOOL_NAMES.has(name)) return callSpaceTool(name, args, context);",
+          "check": "if (SPACE_TOOL_NAMES.has(name)) return callSpaceTool"
+        }
+      ]
+    },
+    {
+      "file": "server/drivers/agents-mcp-env.ts",
+      "marker": "OMB_SPACE",
+      "description": "Allow OMB_SPACE in AGENTS_MCP_ENV",
+      "patches": [
+        {
+          "find": "\"OMB_X_RESEARCH\", \"OMB_ESCALATIONS\", TOOL_BRIDGE_ENV] as const;",
+          "replace": "\"OMB_X_RESEARCH\", \"OMB_ESCALATIONS\", \"OMB_SPACE\", TOOL_BRIDGE_ENV] as const;",
+          "check": "\"OMB_SPACE\""
+        }
+      ]
+    },
+    {
+      "file": "src/components/TeamMapPage.tsx",
+      "marker": "QuestBoard",
+      "description": "Mount QuestBoard and QuestBoardToggle on the Team map page",
+      "patches": [
+        {
+          "find": "import { MapModeToggle, TeamOrgChart, useMapMode } from \"./TeamOrgChart\";",
+          "replace": "import { MapModeToggle, TeamOrgChart, useMapMode } from \"./TeamOrgChart\"; import { QuestBoard, QuestBoardToggle, useQuestBoard } from \"./space/QuestBoard\";",
+          "check": "from \"./space/QuestBoard\""
+        },
+        {
+          "find": "  const reportsChart = useMapMode() === \"people\" && teamPeople !== null;",
+          "replace": "  const reportsChart = useMapMode() === \"people\" && teamPeople !== null; const questBoard = useQuestBoard();",
+          "check": "const questBoard = useQuestBoard()"
+        },
+        {
+          "find": "        {teamPeople && <MapModeToggle />}",
+          "replace": "        <QuestBoardToggle />{teamPeople && !questBoard && <MapModeToggle />}",
+          "check": "<QuestBoardToggle />"
+        },
+        {
+          "find": "      {reportsChart ? <TeamOrgChart bots={bots} /> : <TeamCanvas",
+          "replace": "      {questBoard ? <QuestBoard bots={bots} /> : reportsChart ? <TeamOrgChart bots={bots} /> : <TeamCanvas",
+          "check": "<QuestBoard bots={bots} />"
+        },
+        {
+          "find": "      {bots.length > 0 && <MapComposer",
+          "replace": "      {bots.length > 0 && !questBoard && <MapComposer",
+          "check": "!questBoard && <MapComposer"
+        }
+      ]
+    },
+    {
+      "file": "src/components/ComputerPanel.tsx",
+      "marker": "PagePanel",
+      "description": "Mount PagePanel tab in ComputerPanel",
+      "patches": [
+        {
+          "find": "import { ComputerFilesPane } from \"./ComputerFilesPane\";",
+          "replace": "import { ComputerFilesPane } from \"./ComputerFilesPane\"; import { PagePanel, pageRows } from \"./space/PagePanel\";",
+          "check": "from \"./space/PagePanel\""
+        },
+        {
+          "find": "  const panelTabs = computerPanelTabs({ advanced, androidConnected });\n  const panelView = resolveComputerPanelView(storedPanelView, { advanced, androidConnected });",
+          "replace": "  const panelTabs = computerPanelTabs({ advanced, androidConnected, hasPage: pageRows(bot.messages).length > 0 });\n  const panelView = resolveComputerPanelView(storedPanelView, { advanced, androidConnected, hasPage: panelTabs.includes(\"page\") });",
+          "check": "pageRows(bot.messages)"
+        },
+        {
+          "find": "      ) : panelView === \"files\" ? (",
+          "replace": "      ) : panelView === \"page\" ? (<PagePanel key={`${bot.id}:${bot.threadId}`} bot={bot} />) : panelView === \"files\" ? (",
+          "check": "panelView === \"page\""
+        }
+      ]
+    },
+    {
+      "file": "src/lib/computer-panel-view.ts",
+      "marker": "\"page\"",
+      "description": "Add 'page' view to ComputerPanelView and computerPanelTabs",
+      "patches": [
+        {
+          "find": "export type ComputerPanelView = \"computer\" | \"android\" | \"browser\" | \"routines\" | \"files\" | \"data\";",
+          "replace": "export type ComputerPanelView = \"computer\" | \"android\" | \"browser\" | \"routines\" | \"files\" | \"data\" | \"page\";",
+          "check": "| \"page\""
+        },
+        {
+          "find": "type PanelTabsContext = { advanced: boolean; androidConnected: boolean };\n\nexport function computerPanelTabs({ advanced, androidConnected }: PanelTabsContext): ComputerPanelView[] {\n  return advanced\n    ? [\"computer\", \"routines\", ...(androidConnected ? ([\"android\"] as const) : []), \"browser\", \"data\"]\n    : [\"computer\", \"browser\", \"data\", \"files\"];\n}",
+          "replace": "type PanelTabsContext = { advanced: boolean; androidConnected: boolean; hasPage?: boolean };\n\nexport function computerPanelTabs({ advanced, androidConnected, hasPage = false }: PanelTabsContext): ComputerPanelView[] {\n  return advanced\n    ? [\"computer\", \"routines\", ...(androidConnected ? ([\"android\"] as const) : []), \"browser\", \"data\", ...(hasPage ? ([\"page\"] as const) : [])]\n    : [\"computer\", \"browser\", \"data\", \"files\", ...(hasPage ? ([\"page\"] as const) : [])];\n}",
+          "check": "hasPage = false"
+        },
+        {
+          "find": "if (value === \"android\" || value === \"browser\" || value === \"routines\" || value === \"files\" || value === \"data\") return value;",
+          "replace": "if (value === \"android\" || value === \"browser\" || value === \"routines\" || value === \"files\" || value === \"data\" || value === \"page\") return value;",
+          "check": "value === \"page\""
+        }
+      ]
+    },
+    {
+      "file": "src/components/computer-panel-tabs.ts",
+      "altFile": "src/lib/computer-panel-tabs.ts",
+      "marker": "computer.tab.page",
+      "description": "Register the Page tab icon and label in PANEL_TABS",
+      "patches": [
+        {
+          "find": "import { CalendarClock, Database, FolderOpen, Globe, Monitor, Smartphone, type LucideIcon } from \"lucide-react\";",
+          "replace": "import { CalendarClock, Database, FolderOpen, Globe, Monitor, PanelsTopLeft, Smartphone, type LucideIcon } from \"lucide-react\";",
+          "check": "PanelsTopLeft"
+        },
+        {
+          "find": "  files: { Icon: FolderOpen, label: \"computer.tab.files\" },",
+          "replace": "  files: { Icon: FolderOpen, label: \"computer.tab.files\" }, page: { Icon: PanelsTopLeft, label: \"computer.tab.page\" },",
+          "check": "computer.tab.page"
+        }
+      ]
+    },
+    {
+      "file": "src/locales/en.json",
+      "marker": "quest.toggle.board",
+      "description": "Add Spaces and Page panel i18n strings to en.json",
+      "patches": [
+        {
+          "find": "  \"sidebar.room.setDescription\": \"Set description\"\n}",
+          "replace": "  \"sidebar.room.setDescription\": \"Set description\",\n  \"computer.tab.page\": \"Page\",\n  \"quest.toggle.board\": \"Spaces\"\n}",
+          "check": "quest.toggle.board"
+        }
+      ]
+    }
+  ]
+}
