@@ -13,6 +13,10 @@ vi.mock("@/state/store", () => ({
   useStore: () => ({ state: { instances: [], selectedId: null, settingsOpen: false }, dispatch: fixture.dispatch }),
 }));
 vi.mock("../Avatar", () => ({ BotAvatar: () => null }));
+vi.mock("../ChatView", () => ({
+  ChatView: ({ bot }: { bot: { id: string; name: string; threadId?: string } }) =>
+    createElement("div", { "data-chat-view": bot.id, "data-chat-thread": bot.threadId ?? "" }, bot.name),
+}));
 
 import { QuestBoard } from "./QuestBoard";
 
@@ -41,10 +45,12 @@ let host: HTMLDivElement;
 let root: Root;
 let animations: string[];
 let under: Element | null;
+let threads = 0;
 beforeEach(() => {
   setLocale("en");
   animations = [];
   under = null;
+  threads = 0;
   HTMLElement.prototype.animate = function (this: HTMLElement) { animations.push(this.dataset.spaceCard ?? ""); return {} as Animation; } as never;
   document.elementFromPoint = () => under;
   Element.prototype.setPointerCapture = () => {};
@@ -61,7 +67,10 @@ beforeEach(() => {
     }
     if (path === "/api/space/scan") return { text: "Scan the Spaces board" };
     if (path === "/api/bots") return { bot: bot("scout", { name: JSON.parse(init!.body!).name }) };
-    if (/^\/api\/bots\/\w[\w-]*\/tasks$/.test(path)) return { bot: {}, task: { threadId: "t-new" } };
+    if (/^\/api\/bots\/\w[\w-]*\/tasks$/.test(path)) {
+      const threadId = threads++ === 0 ? "t-new" : `t-new-${threads}`;
+      return { bot: {}, task: { threadId, title: init?.body ? JSON.parse(init.body).title : undefined } };
+    }
     if (path === "/api/space/import-kanban") return { created: 2, updated: 1 };
     return {};
   });
@@ -149,6 +158,22 @@ describe("the Spaces map", () => {
     await vi.waitFor(() => expect(calls("/api/space/placements")).toEqual([{ method: "PUT", body: JSON.stringify({ botId: "chief", goalId: "sup" }) }]));
     dragTo(tile("web").querySelector('[data-space-card="pepper"] [data-bot-id]')!, host.querySelector("[data-space-palette]"));
     await vi.waitFor(() => expect(calls("/api/space/placements").at(-1)).toEqual({ method: "PUT", body: JSON.stringify({ botId: "pepper", goalId: null }) }));
+  });
+
+  it("places multiple threads of the same agent in one Space and opens that thread's conversation on the side when clicked", async () => {
+    await render();
+    dragTo(host.querySelector('[data-palette-bot="chief"]')!, tile("sup").querySelector("header")!);
+    dragTo(host.querySelector('[data-palette-bot="chief"]')!, tile("sup").querySelector("header")!);
+    await vi.waitFor(() => expect([...tile("sup").querySelectorAll<HTMLElement>('[data-space-card="chief"]')].map((card) => card.dataset.spaceThread)).toEqual(["t-new", "t-new-2"]));
+    const cards = [...tile("sup").querySelectorAll<HTMLElement>('[data-space-card="chief"]')];
+    expect(cards[0]!.textContent).toContain("Supplier signed");
+    expect(cards[1]!.textContent).toContain("Supplier signed #2");
+    flushSync(() => cards[1]!.querySelector<HTMLButtonElement>("[data-bot-id]")!.click());
+    const chatDrawer = host.querySelector<HTMLElement>("[data-space-chat]")!;
+    expect(chatDrawer?.dataset.spaceChat).toBe("chief");
+    expect(chatDrawer?.dataset.spaceChatThread).toBe("t-new-2");
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleSettings", botId: "chief", open: false });
+    await vi.waitFor(() => expect(calls("/api/bots/chief/tasks/t-new-2?messages=80")).toHaveLength(1));
   });
 
   it("drags a card from one tile to another, which glides it there, and a press without moving stays a click", async () => {

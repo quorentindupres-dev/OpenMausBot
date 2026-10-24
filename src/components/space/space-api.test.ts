@@ -4,7 +4,7 @@ import type { Bot } from "@/state/store";
 import { EMPTY_SPACE, type SpaceGoal } from "../../../shared/space";
 import { computerPanelTabs, resolveComputerPanelView } from "@/lib/computer-panel-view";
 import { pageRows } from "./PagePanel";
-import { benchBots, sortedGoals, spaceThreads, zoneBots } from "./space-api";
+import { benchBots, sortedGoals, spaceSlots, spaceThreads, zoneBots } from "./space-api";
 
 const goal = (id: string, extra: Partial<SpaceGoal> = {}): SpaceGoal => ({
   id, title: id, goal: "", level: "general", outcomes: [], roadmap: [], tasks: [], asks: [], status: "active", sortOrder: 0, createdAt: 0, updatedAt: 0, ...extra,
@@ -18,10 +18,21 @@ describe("quest board helpers", () => {
     expect(benchBots(space, bots).map((bot) => bot.id)).toEqual(["b", "c"]);
   });
 
-  it("lists a Space's open threads, not the archived ones", () => {
-    const owners = [{ id: "a", name: "A", tasks: [{ threadId: "t1", title: "Hero fix" }, { threadId: "t2", title: "Old", archivedAt: 1 }, { threadId: "t3", title: "Elsewhere" }] }] as unknown as Bot[];
-    const space = { ...EMPTY_SPACE, threadGoals: { t1: "g", t2: "g", t3: "other" } };
-    expect(spaceThreads(space, owners, "g").map((thread) => [thread.bot.id, thread.threadId, thread.title])).toEqual([["a", "t1", "Hero fix"]]);
+  it("lists a Space's open threads, not the archived ones, and creates one slot per thread", () => {
+    const owners = [
+      { id: "a", name: "A", tasks: [{ threadId: "t1", title: "Hero fix" }, { threadId: "t2", title: "Old", archivedAt: 1 }, { threadId: "t3", title: "Copy fix" }] },
+      { id: "b", name: "B" },
+    ] as unknown as Bot[];
+    const space = { ...EMPTY_SPACE, placements: { a: "g", b: "g" }, threadGoals: { t1: "g", t2: "g", t3: "g" } };
+    expect(spaceThreads(space, owners, "g").map((thread) => [thread.bot.id, thread.threadId, thread.title])).toEqual([
+      ["a", "t1", "Hero fix"],
+      ["a", "t3", "Copy fix"],
+    ]);
+    expect(spaceSlots(space, owners, "g").map((slot) => [slot.bot.id, slot.threadId ?? null])).toEqual([
+      ["a", "t1"],
+      ["a", "t3"],
+      ["b", null],
+    ]);
   });
 
   it("orders active goals first, then by their order", () => {

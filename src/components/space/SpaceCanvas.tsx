@@ -7,6 +7,7 @@ import { CARD_WIDTH, fitTeams, zoomAt, type Point, type View } from "@/lib/team-
 import { BotCard } from "../TeamCanvas";
 import type { SpaceGoal, SpaceLayout, SpaceState } from "../../../shared/space";
 import { LevelChip } from "./LevelChip";
+import { benchBots as listBenchBots, spaceSlots, type KnownThread, type SpaceSlot } from "./space-api";
 import type { Drag } from "./space-drag";
 import { LEVEL_STYLE } from "./space-levels";
 import { BENCH_KEY, layoutSpaces, resizeTile, tileColumns, toCanvas, type ResizeCorner, type SpaceTile } from "./space-layout";
@@ -23,7 +24,8 @@ type Gesture = { id: number; start: Point; view: View; moved: boolean } & (
 export type SpaceCanvasActions = {
   moveTile(key: string, layout: SpaceLayout): void;
   open(goal: SpaceGoal): void;
-  menu(event: ReactMouseEvent, goal: SpaceGoal, bot?: Bot): void;
+  openCard(slot: SpaceSlot, goal?: SpaceGoal): void;
+  menu(event: ReactMouseEvent, goal: SpaceGoal, bot?: Bot, threadId?: string): void;
   pickLevel(event: ReactMouseEvent, goal: SpaceGoal): void;
   canvasMenu(screen: Point, at: Point): void;
   newSpaceAt(at: Point): void;
@@ -31,7 +33,16 @@ export type SpaceCanvasActions = {
   rename(goal: SpaceGoal, title: string): void;
 };
 
-function useGlide(world: React.RefObject<HTMLDivElement | null>, scale: number, placements: Record<string, string>, loaded: boolean) {
+const NO_KNOWN: Readonly<Record<string, KnownThread>> = {};
+
+function useGlide(
+  world: React.RefObject<HTMLDivElement | null>,
+  scale: number,
+  placements: Record<string, string>,
+  threadGoals: Record<string, string>,
+  knownThreads: Readonly<Record<string, KnownThread>>,
+  loaded: boolean,
+) {
   const last = useRef(new Map<string, { x: number; y: number; key: string }>());
   useLayoutEffect(() => {
     const root = world.current;
@@ -39,18 +50,20 @@ function useGlide(world: React.RefObject<HTMLDivElement | null>, scale: number, 
     const origin = root.getBoundingClientRect();
     const seen = new Map<string, { x: number; y: number; key: string }>();
     for (const card of root.querySelectorAll<HTMLElement>("[data-space-card]")) {
-      const id = card.dataset.spaceCard!, key = card.dataset.spaceIn!;
+      const botId = card.dataset.spaceCard!, threadId = card.dataset.spaceThread, key = card.dataset.spaceIn!;
+      const id = threadId ? `${botId}:${threadId}` : botId;
       const box = card.getBoundingClientRect();
       const here = { x: (box.left - origin.left) / scale, y: (box.top - origin.top) / scale, key };
-      const before = last.current.get(id);
+      const before = last.current.get(id) ?? last.current.get(botId);
       if (loaded && before && before.key !== key && card.animate) {
         card.animate([{ transform: `translate(${before.x - here.x}px, ${before.y - here.y}px)` }, { transform: "translate(0, 0)" }],
           { duration: GLIDE_MS, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
       }
       seen.set(id, here);
+      if (!seen.has(botId)) seen.set(botId, here);
     }
     last.current = loaded ? seen : new Map();
-  }, [world, scale, placements, loaded]);
+  }, [world, scale, placements, threadGoals, knownThreads, loaded]);
 }
 
 function TitleInput({ goal, onDone }: { goal: SpaceGoal; onDone(title: string | null): void }) {
@@ -63,9 +76,11 @@ function TitleInput({ goal, onDone }: { goal: SpaceGoal; onDone(title: string | 
     className="min-w-0 flex-1 rounded-md border border-accent/60 bg-app px-2 py-1 text-[13px] font-semibold outline-none" />;
 }
 
-export function SpaceCanvas({ space, bots, actions, drag, editingTitle, onTitleDone, toCanvasRef, bottomInset = 0 }: {
+export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat = null, actions, drag, editingTitle, onTitleDone, toCanvasRef, bottomInset = 0 }: {
   space: SpaceState;
   bots: Bot[];
+  knownThreads?: Readonly<Record<string, KnownThread>>;
+  activeChat?: { botId: string; threadId?: string } | null;
   actions: SpaceCanvasActions;
   drag: Drag | null;
   editingTitle: string | null;
@@ -80,22 +95,21 @@ export function SpaceCanvas({ space, bots, actions, drag, editingTitle, onTitleD
   const suppressClick = useRef(false);
   const [view, setView] = useState<View>({ x: 40, y: 40, scale: 1 });
   const [moved, setMoved] = useState<{ key: string; x: number; y: number; w: number; h: number } | null>(null);
-  const goalIds = useMemo(() => new Set(space.goals.map((goal) => goal.id)), [space.goals]);
-  const keyOf = useCallback((bot: Bot) => goalIds.has(space.placements[bot.id] ?? "") ? space.placements[bot.id]! : BENCH_KEY, [goalIds, space.placements]);
   const members = useMemo(() => {
-    const groups = new Map<string, Bot[]>();
-    for (const bot of bots) groups.set(keyOf(bot), [...(groups.get(keyOf(bot)) ?? []), bot]);
+    const groups = new Map<string, SpaceSlot[]>();
+    for (const goal of space.goals) groups.set(goal.id, spaceSlots(space, bots, goal.id, knownThreads));
+    groups.set(BENCH_KEY, listBenchBots(space, bots, knownThreads).map((bot) => ({ id: bot.id, bot })));
     return groups;
-  }, [bots, keyOf]);
+  }, [space, bots, knownThreads]);
   const benchBots = useMemo(() => {
     const list = members.get(BENCH_KEY) ?? [];
-    return { chiefs: list.filter((bot) => bot.chiefOfStaff).length, members: list.filter((bot) => !bot.chiefOfStaff).length };
+    return { chiefs: list.filter((slot) => slot.bot.chiefOfStaff).length, members: list.filter((slot) => !slot.bot.chiefOfStaff).length };
   }, [members]);
   const tiles = useMemo(() => layoutSpaces(space.goals, (key) => members.get(key)?.length ?? 0, space.bench, benchBots)
     .map((tile) => moved?.key === tile.key ? { ...tile, x: moved.x, y: moved.y, w: moved.w, h: moved.h } : tile), [space.goals, space.bench, members, benchBots, moved]);
   const current = useRef({ view, tiles, bottomInset });
   current.current = { view, tiles, bottomInset };
-  useGlide(world, view.scale, space.placements, space.goals.length > 0);
+  useGlide(world, view.scale, space.placements, space.threadGoals, knownThreads, space.goals.length > 0);
 
   const local = (client: { clientX: number; clientY: number }): Point => {
     const bounds = viewport.current?.getBoundingClientRect();
@@ -200,7 +214,6 @@ export function SpaceCanvas({ space, bots, actions, drag, editingTitle, onTitleD
   };
   const emptyCanvas = (target: EventTarget) => !(target as HTMLElement).closest("[data-space-key], button, input");
   const hovered = drag?.target?.kind === "tile" ? drag.target.key : null;
-  const draggedBot = drag?.item.kind === "bot" ? drag.item.botId : null;
 
   return <div ref={viewport} role="region" aria-label={t("quest.canvas.region")} tabIndex={0} data-space-canvas
     className={cn("relative min-h-0 flex-1 touch-none select-none overflow-clip outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40",
@@ -229,18 +242,30 @@ export function SpaceCanvas({ space, bots, actions, drag, editingTitle, onTitleD
         const goal = space.goals.find((candidate) => candidate.id === tile.key);
         const inside = members.get(tile.key) ?? [];
         const style = goal ? LEVEL_STYLE[goal.level] : null;
-        const fromHere = draggedBot !== null && inside.some((bot) => bot.id === draggedBot);
+        const fromHere = drag?.item.kind === "bot" && (drag.item.fromGoalId ?? BENCH_KEY) === tile.key && Boolean(drag.item.fromGoalId || tile.key === BENCH_KEY);
         const dropping = hovered === tile.key && (drag?.item.kind !== "bot" || !fromHere);
         const title = goal ? goal.title : t("quest.bench");
         const open = goal?.asks.filter((ask) => ask.status === "open").length ?? 0;
-        const chiefs = goal ? [] : inside.filter((bot) => bot.chiefOfStaff);
-        const others = goal ? inside : inside.filter((bot) => !bot.chiefOfStaff);
+        const chiefs = goal ? [] : inside.filter((slot) => slot.bot.chiefOfStaff);
+        const others = goal ? inside : inside.filter((slot) => !slot.bot.chiefOfStaff);
         const hierarchy = chiefs.length > 0 && others.length > 0;
         const columns = Math.min(tileColumns(tile.w), Math.max(1, inside.length));
-        const renderBot = (bot: Bot) => <div key={bot.id} data-space-card={bot.id} data-space-in={tile.key} data-drag-bot={bot.id} className="relative cursor-grab touch-none active:cursor-grabbing"
-          onContextMenu={(event) => { if (!goal) return; event.preventDefault(); event.stopPropagation(); actions.menu(event, goal, bot); }}>
-          <BotCard bot={bot} selected={state.selectedId === bot.id && state.settingsOpen} moving={draggedBot === bot.id} connected={false} />
-        </div>;
+        const renderSlot = (slot: SpaceSlot) => {
+          const isSelected = activeChat
+            ? (slot.threadId ? activeChat.threadId === slot.threadId : activeChat.botId === slot.bot.id && !activeChat.threadId)
+            : (state.selectedId === slot.bot.id && state.settingsOpen);
+          const isMoving = drag?.item.kind === "bot" && (
+            drag.item.threadId
+              ? drag.item.threadId === slot.threadId
+              : drag.item.botId === slot.bot.id && (drag.item.fromGoalId ?? undefined) === goal?.id
+          );
+          return <div key={slot.id} data-space-card={slot.bot.id} data-space-thread={slot.threadId} data-space-in={tile.key}
+            data-drag-bot={slot.bot.id} data-drag-thread={slot.threadId} data-drag-from={goal?.id}
+            className="relative cursor-grab touch-none active:cursor-grabbing"
+            onContextMenu={(event) => { if (!goal) return; event.preventDefault(); event.stopPropagation(); actions.menu(event, goal, slot.bot, slot.threadId); }}>
+            <BotCard bot={slot.bot} subtitle={slot.title} selected={isSelected} moving={Boolean(isMoving)} connected={false} onSelect={() => actions.openCard(slot, goal)} />
+          </div>;
+        };
         return <section key={tile.key} data-space-key={tile.key} data-goal-zone={goal?.id} data-level={goal?.level} data-dropping={dropping || undefined}
           aria-label={goal ? t("quest.space.aria", { title }) : t("quest.bench")}
           onContextMenu={(event) => { if (!goal) return; event.preventDefault(); event.stopPropagation(); actions.menu(event, goal); }}
@@ -270,13 +295,13 @@ export function SpaceCanvas({ space, bots, actions, drag, editingTitle, onTitleD
           </button>}
           {goal ? <div className={cn("grid flex-1 content-start gap-4 px-5 pb-5", inside.length === 0 && "flex")}
             style={inside.length > 0 ? { gridTemplateColumns: `repeat(${columns}, ${CARD_WIDTH}px)` } : undefined}>
-            {inside.map(renderBot)}
+            {inside.map(renderSlot)}
             {inside.length === 0 && <p className={cn("flex min-h-[84px] flex-1 items-center justify-center rounded-xl border border-dashed px-6 text-center text-[12px]",
               dropping ? "border-accent/70 text-ink" : "border-hairline/70 text-ink-secondary")}>{t("quest.zone.dropHint")}</p>}
           </div> : <div className="flex items-center px-5 pb-5">
-            {chiefs.length > 0 && <div data-bench-lane="chiefs" className="flex flex-col gap-4">{chiefs.map(renderBot)}</div>}
+            {chiefs.length > 0 && <div data-bench-lane="chiefs" className="flex flex-col gap-4">{chiefs.map(renderSlot)}</div>}
             {hierarchy && <div data-bench-hierarchy className="flex w-10 shrink-0 justify-center text-ink-secondary/35" aria-hidden="true"><ArrowRight size={22} strokeWidth={1} /></div>}
-            {others.length > 0 && <div data-bench-lane="members" className="flex flex-col gap-4">{others.map(renderBot)}</div>}
+            {others.length > 0 && <div data-bench-lane="members" className="flex flex-col gap-4">{others.map(renderSlot)}</div>}
             {inside.length === 0 && <p className={cn("flex h-[84px] w-full items-center justify-center rounded-xl border border-dashed px-6 text-center text-[12px]",
               dropping ? "border-accent/70 text-ink" : "border-hairline/70 text-ink-secondary")}>{t("quest.benchEmpty")}</p>}
           </div>}

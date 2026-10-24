@@ -15,7 +15,11 @@ This fork adds, on top of upstream OpenMausBot:
     map and a Space appears there with its name ready to type, then pick its
     level and size on the tile; every agent with where it is ("in Website", "on
     the bench"), with a search box past 8 agents — drag one onto a Space to
-    place it. The shelf is also a drop zone for the bench.
+    spawn a dedicated thread of that agent in the Space. Drag the same agent a
+    second time to place a second thread card of that agent in the same Space.
+    Clicking a placed agent card opens that thread's conversation in a side
+    drawer on the right (instead of the agent settings panel). The shelf is also
+    a drop zone for the bench.
   - All dragging is pointer-based (no HTML5 drag and drop): past 4 px a ghost
     follows the cursor in screen space, the hovered tile lights up, the ghost
     says where it will land ("Move to …", "send it to the bench"), and letting

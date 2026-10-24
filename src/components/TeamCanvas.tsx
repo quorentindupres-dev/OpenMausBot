@@ -27,7 +27,7 @@ type Gesture = {
 const iconButton = "flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-control hover:text-ink focus-visible:outline-2 focus-visible:outline-accent";
 const menuButton = "flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[12px] text-ink-secondary hover:bg-control hover:text-ink";
 
-export function BotCard({ bot, selected, moving, connected, tagged = false, sent, onComputer, onArrange }: {
+export function BotCard({ bot, selected, moving, connected, tagged = false, sent, subtitle, onSelect, onComputer, onArrange }: {
   bot: Bot;
   selected: boolean;
   moving: boolean;
@@ -35,6 +35,8 @@ export function BotCard({ bot, selected, moving, connected, tagged = false, sent
   tagged?: boolean;
   /** Set while a message just sent from the map acknowledges this card; a new value restarts it. */
   sent?: number;
+  subtitle?: string;
+  onSelect?: (bot: Bot) => void;
   onComputer?: (bot: Bot) => void;
   onArrange?: (bot: Bot, delta: number) => void;
 }) {
@@ -47,7 +49,7 @@ export function BotCard({ bot, selected, moving, connected, tagged = false, sent
     selected ? "border-accent/60 ring-1 ring-accent/15" : connected ? "border-accent/40" : "border-hairline/50 hover:border-ink-secondary/40", tagged && "border-accent ring-4 ring-accent/25", moving && "opacity-35")}>
     {sent !== undefined && <span key={sent} data-sent-highlight aria-hidden className="pointer-events-none absolute -inset-px animate-sent-border rounded-xl border-2 border-accent" />}
     <button data-bot-id={bot.id} aria-label={t("canvas.editBot", { name: bot.name })}
-      onClick={() => openBotSettings(dispatch, "identity", { botId: bot.id })}
+      onClick={() => (onSelect ? onSelect(bot) : openBotSettings(dispatch, "identity", { botId: bot.id }))}
       title={onArrange ? t("canvas.reorderHint") : undefined}
       onKeyDown={(event) => {
         if (!onArrange || !event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
@@ -59,12 +61,12 @@ export function BotCard({ bot, selected, moving, connected, tagged = false, sent
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5"><span className="truncate text-[14px] font-semibold">{bot.name}</span>
           {bot.chiefOfStaff && <Crown size={12} className="shrink-0 text-warning" aria-label={t("chat.chiefOfStaff")} />}</span>
-        <span className="mt-1 block truncate text-[11px] text-ink-secondary">{bot.title || (bot.chiefOfStaff ? t("chat.chiefOfStaff") : t("canvas.bot"))}</span>
+        <span className="mt-1 block truncate text-[11px] text-ink-secondary">{subtitle || bot.title || (bot.chiefOfStaff ? t("chat.chiefOfStaff") : t("canvas.bot"))}</span>
       </span>
     </button>
     <div className="flex h-[43px] items-center gap-1 border-t border-hairline/30 px-2">
       <button className={cn(iconButton, "size-8")} aria-label={t("canvas.openBotChat", { name: bot.name })} title={t("canvas.openChat")}
-        onClick={() => openBot(dispatch, bot, showThreads)}><MessageCircle size={13} /></button>
+        onClick={() => (onSelect ? onSelect(bot) : openBot(dispatch, bot, showThreads))}><MessageCircle size={13} /></button>
       {status.tone !== "idle" && <span className="flex items-center gap-1.5 text-[10px] text-ink-secondary" title={status.label}>
         <span className={cn("size-1.5 rounded-full", status.tone === "success" ? "bg-success" : status.tone === "warning" ? "bg-warning" : status.tone === "danger" ? "bg-danger" : "bg-ink-secondary/35")} />
         {status.label}

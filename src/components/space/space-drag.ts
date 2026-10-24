@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import type { Point } from "@/lib/team-canvas";
 import { SPACE_LEVELS, type SpaceLevel } from "../../../shared/space";
 
-export type DragItem = { kind: "bot"; botId: string } | { kind: "space"; level: SpaceLevel };
+export type DragItem = { kind: "bot"; botId: string; threadId?: string; fromGoalId?: string } | { kind: "space"; level: SpaceLevel };
 export type DropTarget = { kind: "tile"; key: string } | { kind: "bench" } | { kind: "canvas" } | null;
 
 const THRESHOLD = 4;
@@ -21,7 +21,14 @@ export function dragItemAt(target: EventTarget | null): DragItem | null {
   const element = target instanceof Element ? target : null;
   const source = element?.closest<HTMLElement>("[data-drag-bot], [data-drag-new]");
   if (!source) return null;
-  if (source.dataset.dragBot) return { kind: "bot", botId: source.dataset.dragBot };
+  if (source.dataset.dragBot) {
+    return {
+      kind: "bot",
+      botId: source.dataset.dragBot,
+      ...(source.dataset.dragThread ? { threadId: source.dataset.dragThread } : {}),
+      ...(source.dataset.dragFrom ? { fromGoalId: source.dataset.dragFrom } : {}),
+    };
+  }
   const level = source.dataset.dragNew as SpaceLevel;
   return SPACE_LEVELS.includes(level) ? { kind: "space", level } : null;
 }
