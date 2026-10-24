@@ -5,14 +5,15 @@ import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { BotAvatar } from "../Avatar";
 import type { SpaceState } from "../../../shared/space";
+import { zoneBots, type KnownThread } from "./space-api";
 
 const SEARCH_FROM = 9;
 const ITEM = "flex w-full cursor-grab touch-none select-none items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] hover:bg-control active:cursor-grabbing";
 
-export function SpacePalette({ space, bots, benchHint }: { space: SpaceState; bots: Bot[]; benchHint: boolean }) {
+export function SpacePalette({ space, bots, knownThreads = {}, benchHint }: { space: SpaceState; bots: Bot[]; knownThreads?: Readonly<Record<string, KnownThread>>; benchHint: boolean }) {
   const [open, setOpen] = useState(true);
   const [query, setQuery] = useState("");
-  const where = (bot: Bot) => space.goals.find((goal) => goal.id === space.placements[bot.id]);
+  const where = (bot: Bot) => space.goals.find((goal) => zoneBots(space, [bot], goal.id, knownThreads).length > 0);
   const shown = query.trim() ? bots.filter((bot) => bot.name.toLowerCase().includes(query.trim().toLowerCase())) : bots;
 
   if (!open) {

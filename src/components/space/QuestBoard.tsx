@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { Download, Plus, ScanSearch, X } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
@@ -20,7 +20,7 @@ import { LEVEL_STYLE } from "./space-levels";
 import { ZoneContextMenu, type ZoneMenuTarget } from "./ZoneContextMenu";
 import {
   addTask, answerAsk, askChiefToScan, createGoal, createGoalThread, deleteTask, importKanban, linkThread, loadThread,
-  newAgentInSpace, newGoalThread, patchTask, placeBot, setBench, setVisualFirst,
+  newAgentInSpace, patchTask, placeBot, setBench, setVisualFirst,
   spaceSlots, spaceThreads, updateGoal, useSpace, zoneBots, type BoardState, type KnownThread, type SpaceSlot,
 } from "./space-api";
 import { showQuestBoard, useQuestBoard } from "./space-ui-state";
@@ -58,10 +58,18 @@ function withThreadGoal(space: BoardState, threadId: string, goalId: string | nu
   return { ...space, threadGoals: goalId ? { ...rest, [threadId]: goalId } : rest };
 }
 
+function nextThreadTitle(goalTitle: string, existingTitles: readonly (string | undefined)[]): string {
+  if (existingTitles.length === 0) return goalTitle;
+  const used = new Set(existingTitles.filter(Boolean));
+  let n = existingTitles.length + 1;
+  while (used.has(`${goalTitle} #${n}`)) n += 1;
+  return `${goalTitle} #${n}`;
+}
+
 const BUTTON = "flex items-center gap-1.5 rounded-lg border border-hairline/60 bg-panel px-3 py-1.5 text-[12px] font-medium hover:bg-control disabled:opacity-50";
 
 export function QuestBoard({ bots }: { bots: Bot[] }) {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const { space, error: loadError, refresh, setSpace } = useSpace();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -72,10 +80,14 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
   const [knownThreads, setKnownThreads] = useState<Record<string, KnownThread>>({});
   const [editingTitle, setEditingTitle] = useState<string | null>(null);
   const pendingSeq = useRef(0);
+  const loadSeq = useRef(0);
+  const chatRef = useRef<ActiveSpaceChat | null>(null);
+  chatRef.current = chat;
   const toCanvasRef = useRef<((client: Point) => Point) | null>(null);
   const chief = bots.find((bot) => bot.chiefOfStaff);
   const opened = space.goals.find((goal) => goal.id === openId);
   const closeMenu = useCallback(() => setMenu(null), []);
+  useEffect(() => { if (state.settingsOpen) setChat(null); }, [state.settingsOpen]);
 
   const fail = (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause));
   const act = (work: Promise<unknown>) => { setError(null); void work.catch(fail).finally(() => void refresh()); };
@@ -87,11 +99,19 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
   const spawnThreadInSpace = (botId: string, goal: SpaceGoal) => {
     if (!bots.some((bot) => bot.id === botId)) return;
     const currentSlots = spaceSlots(space, bots, goal.id, knownThreads).filter((slot) => slot.bot.id === botId);
-    const needsPlacement = (space.placements[botId] ?? null) !== goal.id;
+    const existingGoalId = space.placements[botId];
+    const hasOtherUnthreadedPlacement = Boolean(
+      existingGoalId &&
+      existingGoalId !== goal.id &&
+      space.goals.some((candidate) => candidate.id === existingGoalId) &&
+      spaceThreads(space, bots, existingGoalId, knownThreads).every((item) => item.bot.id !== botId),
+    );
+    const needsPlacement = !hasOtherUnthreadedPlacement && (existingGoalId ?? null) !== goal.id;
     if (needsPlacement) setSpace(withPlacement(space, botId, goal.id));
+    const existingTitles = currentSlots.map((slot) => slot.title ?? goal.title);
     const entries = (currentSlots.length === 1 && !currentSlots[0]!.threadId
       ? [goal.title, `${goal.title} #2`]
-      : [currentSlots.length > 0 ? `${goal.title} #${currentSlots.length + 1}` : goal.title]
+      : [nextThreadTitle(goal.title, existingTitles)]
     ).map((title) => ({ pendingId: `pending-${++pendingSeq.current}`, title }));
     setKnownThreads((prev) => {
       const next = { ...prev };
@@ -101,13 +121,24 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
     const work = Promise.all([
       ...(needsPlacement ? [placeBot(botId, goal.id)] : []),
       ...entries.map(({ pendingId, title }) => createGoalThread(botId, goal, title).then(({ threadId, bot: updated, title: finalTitle }) => {
-        if (updated?.id) dispatch({ type: "botPatched", bot: updated });
+        const openingPending = chatRef.current?.threadId === pendingId;
+        if (updated?.id) {
+          dispatch(openingPending
+            ? { type: "taskSwitched", bot: { ...updated, threadId, messages: updated.messages ?? [] } }
+            : { type: "botPatched", bot: updated });
+        }
         setKnownThreads((prev) => {
           const { [pendingId]: _temp, ...rest } = prev;
           return { ...rest, [threadId]: { botId, title: finalTitle, goalId: goal.id } };
         });
-        setSpace((prev) => withThreadGoal(withPlacement(prev, botId, goal.id), threadId, goal.id));
-        setChat((current) => current?.threadId === pendingId ? { ...current, threadId, title: finalTitle } : current);
+        setSpace((prev) => withThreadGoal(needsPlacement ? withPlacement(prev, botId, goal.id) : prev, threadId, goal.id));
+        if (openingPending) {
+          setChat((current) => current?.threadId === pendingId ? { ...current, threadId, title: finalTitle } : current);
+          const seq = ++loadSeq.current;
+          void loadThread(botId, threadId)
+            .then((res) => { if (loadSeq.current === seq && res?.bot?.id) dispatch({ type: "taskSwitched", bot: res.bot }); })
+            .catch(fail);
+        }
       })),
     ]);
     act(work);
@@ -125,7 +156,7 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
         const fromSlots = spaceSlots(space, bots, fromGoalId, knownThreads);
         const current = fromSlots.find((slot) => slot.threadId === threadId);
         const othersInSource = fromSlots.filter((slot) => slot.bot.id === botId && slot.threadId !== threadId);
-        const moveBotPlacement = othersInSource.length === 0;
+        const moveBotPlacement = othersInSource.length === 0 && (space.placements[botId] === fromGoalId || !space.placements[botId]);
         setKnownThreads((prev) => ({ ...prev, [threadId]: { botId, title: current?.title ?? targetGoal.title, goalId } }));
         setSpace(withThreadGoal(moveBotPlacement ? withPlacement(space, botId, goalId) : space, threadId, goalId));
         act(Promise.all([linkThread(threadId, goalId), ...(moveBotPlacement ? [placeBot(botId, goalId)] : [])]));
@@ -134,15 +165,27 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
       place(botId, goalId);
       return;
     }
-    if (threadId) {
+    const targetThreads = threadId
+      ? [threadId]
+      : (fromGoalId ? spaceThreads(space, bots, fromGoalId, knownThreads).filter((item) => item.bot.id === botId).map((item) => item.threadId) : []);
+    if (targetThreads.length > 0) {
+      const removed = new Set(targetThreads);
       const remaining = space.goals.flatMap((goal) => spaceSlots(space, bots, goal.id, knownThreads).map((slot) => ({ slot, goalId: goal.id })))
-        .find((entry) => entry.slot.bot.id === botId && entry.slot.threadId && entry.slot.threadId !== threadId);
+        .find((entry) => entry.slot.bot.id === botId && entry.slot.threadId && !removed.has(entry.slot.threadId));
       const nextGoalId = remaining?.goalId ?? null;
-      const updatePlacement = (space.placements[botId] ?? null) !== nextGoalId;
-      setKnownThreads((prev) => ({ ...prev, [threadId]: { botId, title: prev[threadId]?.title ?? "", goalId: null } }));
-      setSpace(withThreadGoal(updatePlacement ? withPlacement(space, botId, nextGoalId) : space, threadId, null));
-      if (chat?.threadId === threadId) setChat(null);
-      act(Promise.all([linkThread(threadId, null), ...(updatePlacement ? [placeBot(botId, nextGoalId)] : [])]));
+      const updatePlacement = (space.placements[botId] ?? null) !== nextGoalId && (!fromGoalId || space.placements[botId] === fromGoalId || !remaining);
+      setKnownThreads((prev) => {
+        const next = { ...prev };
+        for (const id of targetThreads) next[id] = { botId, title: prev[id]?.title ?? "", goalId: null };
+        return next;
+      });
+      setSpace((prev) => {
+        let next = updatePlacement ? withPlacement(prev, botId, nextGoalId) : prev;
+        for (const id of targetThreads) next = withThreadGoal(next, id, null);
+        return next;
+      });
+      if (chat?.threadId && removed.has(chat.threadId)) setChat(null);
+      act(Promise.all([...targetThreads.map((id) => linkThread(id, null)), ...(updatePlacement ? [placeBot(botId, nextGoalId)] : [])]));
       return;
     }
     place(botId, null);
@@ -151,11 +194,12 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
     setOpenId(null);
     setError(null);
     dispatch({ type: "toggleSettings", botId: slot.bot.id, open: false });
+    const seq = ++loadSeq.current;
     if (slot.threadId) {
       setChat({ botId: slot.bot.id, threadId: slot.threadId, goalId: goal?.id, title: slot.title ?? goal?.title });
       if (!slot.threadId.startsWith("pending-")) {
         void loadThread(slot.bot.id, slot.threadId)
-          .then((res) => { if (res?.bot?.id) dispatch({ type: "taskSwitched", bot: res.bot }); })
+          .then((res) => { if (loadSeq.current === seq && res?.bot?.id) dispatch({ type: "taskSwitched", bot: res.bot }); })
           .catch(fail);
       }
       return;
@@ -167,17 +211,17 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
           if (updated?.id) dispatch({ type: "botPatched", bot: updated });
           setKnownThreads((prev) => ({ ...prev, [threadId]: { botId: slot.bot.id, title, goalId: goal.id } }));
           setSpace((prev) => withThreadGoal(prev, threadId, goal.id));
-          setChat({ botId: slot.bot.id, threadId, goalId: goal.id, title });
+          if (loadSeq.current === seq) setChat({ botId: slot.bot.id, threadId, goalId: goal.id, title });
           return loadThread(slot.bot.id, threadId);
         })
-        .then((res) => { if (res?.bot?.id) dispatch({ type: "taskSwitched", bot: res.bot }); })
+        .then((res) => { if (loadSeq.current === seq && res?.bot?.id) dispatch({ type: "taskSwitched", bot: res.bot }); })
         .catch(fail);
       return;
     }
     setChat({ botId: slot.bot.id, threadId: slot.bot.threadId, title: slot.bot.title });
     if (slot.bot.threadId) {
       void loadThread(slot.bot.id, slot.bot.threadId)
-        .then((res) => { if (res?.bot?.id) dispatch({ type: "taskSwitched", bot: res.bot }); })
+        .then((res) => { if (loadSeq.current === seq && res?.bot?.id) dispatch({ type: "taskSwitched", bot: res.bot }); })
         .catch(fail);
     }
   };
@@ -196,11 +240,6 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
       .catch(fail).finally(() => void refresh());
   };
   const { drag, begin } = useSpaceDrag(dropped);
-  const openThread = (bot: Bot, goal: SpaceGoal) => {
-    setMenu(null);
-    setError(null);
-    void newGoalThread(bot.id, goal).then((threadId) => dispatch({ type: "switchTask", botId: bot.id, threadId })).catch(fail);
-  };
   const newAgent = (name: string, goal: SpaceGoal) => act(newAgentInSpace(name, goal.id).then((bot) => dispatch({ type: "botAdded", bot, preserveSelection: true })));
   const cardActions = (goal: SpaceGoal): SpaceCardActions => ({
     menu: (event: MouseEvent, bot?: Bot) => setMenu({ kind: "space", x: event.clientX, y: event.clientY, goal, ...(bot ? { bot } : {}) }),
@@ -212,7 +251,10 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
     deleteTask: (taskId) => act(deleteTask(goal.id, taskId)),
     answerAsk: (askId, answer) => act(answerAsk(goal.id, askId, answer)),
     openThread: (thread) => dispatch({ type: "switchTask", botId: thread.bot.id, threadId: thread.threadId }),
-    closeThread: (thread) => dispatch({ type: "updateTask", botId: thread.bot.id, threadId: thread.threadId, patch: { archivedAt: Date.now() } }),
+    closeThread: (thread) => {
+      dispatch({ type: "updateTask", botId: thread.bot.id, threadId: thread.threadId, patch: { archivedAt: Date.now() } });
+      moveCard(thread.bot.id, thread.threadId, goal.id, null);
+    },
   });
   const canvasActions: SpaceCanvasActions = {
     moveTile: (key: string, layout: SpaceLayout) => {
@@ -241,8 +283,14 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
   const benchTarget = drag?.item.kind === "bot" && Boolean(drag.item.fromGoalId) && (drag.target?.kind === "bench" || drag.target?.kind === "canvas" || (drag.target?.kind === "tile" && drag.target.key === BENCH_KEY));
   const targetTitle = drag?.target?.kind === "tile" && drag.target.key !== BENCH_KEY ? space.goals.find((goal) => drag.target?.kind === "tile" && goal.id === drag.target.key)?.title : undefined;
   const activeChatBot = chat ? bots.find((bot) => bot.id === chat.botId) : undefined;
+  const chatReady = Boolean(activeChatBot && (!chat?.threadId || activeChatBot.threadId === chat.threadId));
   const chatBot = activeChatBot && chat?.threadId
-    ? { ...activeChatBot, threadId: chat.threadId, messages: activeChatBot.threadId === chat.threadId ? activeChatBot.messages : [] }
+    ? {
+        ...activeChatBot,
+        threadId: chat.threadId,
+        messages: chatReady ? activeChatBot.messages : [],
+        awaitingThreadSnapshot: !chatReady || activeChatBot.awaitingThreadSnapshot,
+      }
     : activeChatBot;
   const chatGoal = chat?.goalId ? space.goals.find((goal) => goal.id === chat.goalId) : undefined;
 
@@ -274,7 +322,7 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
         <button type="button" aria-label={t("common.close")} className="rounded p-1 hover:bg-control" onClick={() => { setError(null); setNotice(null); }}><X size={14} /></button>
       </div>}
       <div className="relative flex min-h-0 flex-1">
-        <SpacePalette space={space} bots={bots} benchHint={Boolean(benchTarget)} />
+        <SpacePalette space={space} bots={bots} knownThreads={knownThreads} benchHint={Boolean(benchTarget)} />
         <SpaceCanvas space={space} bots={bots} knownThreads={knownThreads} activeChat={chat} actions={canvasActions} drag={drag} editingTitle={editingTitle} onTitleDone={() => setEditingTitle(null)} toCanvasRef={toCanvasRef} />
         {opened && <aside aria-label={t("quest.space.aria", { title: opened.title })} data-space-drawer
           className="absolute inset-y-0 right-0 z-30 flex w-[400px] max-w-full flex-col gap-2 border-l border-hairline/50 bg-app/95 p-3 shadow-xl backdrop-blur">
@@ -314,7 +362,7 @@ export function QuestBoard({ bots }: { bots: Bot[] }) {
         document.body,
       )}
       {menu?.kind === "space" && <ZoneContextMenu target={menu} zoneBots={zoneBots(space, bots, menu.goal.id, knownThreads)} allBots={bots}
-        onNewThread={(bot) => openThread(bot, menu.goal)} onEdit={() => { setEditing({ goal: menu.goal }); setMenu(null); }}
+        onNewThread={(bot) => { spawnThreadInSpace(bot.id, menu.goal); setMenu(null); }} onEdit={() => { setEditing({ goal: menu.goal }); setMenu(null); }}
         onBench={(bot) => { moveCard(bot.id, menu.threadId, menu.goal.id, null); setMenu(null); }} onClose={closeMenu} />}
       {menu?.kind === "canvas" && <PointMenu x={menu.x} y={menu.y} label={t("quest.canvas.menu")} onClose={closeMenu}>
         <MenuItem onClick={() => { setEditing({ level: "general", at: menu.at }); setMenu(null); }}><Plus size={14} />{t("quest.canvas.newHere")}</MenuItem>

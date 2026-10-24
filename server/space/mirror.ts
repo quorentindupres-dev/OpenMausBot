@@ -61,7 +61,7 @@ export function mirrorSpace(root: string, state: SpaceState, bots: readonly Spac
   writeFileAtomic(logFile, log.map((entry) => JSON.stringify(entry)).join("\n") + (log.length ? "\n" : ""));
   for (const bot of bots) {
     const notes = log.filter((entry) => entry.botId === bot.id);
-    const space = state.goals.find((goal) => goal.id === state.placements[bot.id]);
+    const space = state.goals.find((goal) => goal.id === state.placements[bot.id] || (bot.tasks ?? []).some((task) => state.threadGoals[task.threadId] === goal.id));
     const involved = space || notes.length > 0 || state.goals.some((goal) => goal.tasks.some((task) => task.botId === bot.id));
     const folder = join(root, "agents", botSlug(bot, bots));
     if (!involved && !existsSync(folder)) continue;

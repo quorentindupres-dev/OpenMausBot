@@ -178,6 +178,10 @@ describe("the Spaces map", () => {
     expect(chatDrawer?.dataset.spaceChatThread).toBe("t-new-2");
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleSettings", botId: "chief", open: false });
     await vi.waitFor(() => expect(calls("/api/bots/chief/tasks/t-new-2?messages=80")).toHaveLength(1));
+    // Dragging a bot with an existing unthreaded placement ("warm" in "logo") into another Space ("sup") keeps it in "logo" too.
+    dragTo(tile("bench").querySelector('[data-space-card="warm"] [data-bot-id]')!, tile("sup").querySelector("header")!);
+    await vi.waitFor(() => expect(tile("sup").querySelector('[data-space-card="warm"]')).not.toBeNull());
+    expect(tile("logo").querySelector('[data-space-card="warm"]')).not.toBeNull();
   });
 
   it("drags a card from one tile to another, which glides it there, and a press without moving stays a click", async () => {

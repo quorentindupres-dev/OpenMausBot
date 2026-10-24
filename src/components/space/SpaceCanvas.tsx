@@ -7,7 +7,7 @@ import { CARD_WIDTH, fitTeams, zoomAt, type Point, type View } from "@/lib/team-
 import { BotCard } from "../TeamCanvas";
 import type { SpaceGoal, SpaceLayout, SpaceState } from "../../../shared/space";
 import { LevelChip } from "./LevelChip";
-import { spaceSlots, type KnownThread, type SpaceSlot } from "./space-api";
+import { slotBot, spaceSlots, type KnownThread, type SpaceSlot } from "./space-api";
 import type { Drag } from "./space-drag";
 import { LEVEL_STYLE } from "./space-levels";
 import { BENCH_KEY, layoutSpaces, resizeTile, tileColumns, toCanvas, type ResizeCorner, type SpaceTile } from "./space-layout";
@@ -55,7 +55,7 @@ function useGlide(
       const id = threadId ? `${botId}:${threadId}` : botId;
       const box = card.getBoundingClientRect();
       const here = { x: (box.left - origin.left) / scale, y: (box.top - origin.top) / scale, key };
-      const before = last.current.get(id) ?? last.current.get(botId);
+      const before = last.current.get(id) ?? (threadId ? undefined : last.current.get(botId));
       if (loaded && before && before.key !== key && card.animate) {
         card.animate([{ transform: `translate(${before.x - here.x}px, ${before.y - here.y}px)` }, { transform: "translate(0, 0)" }],
           { duration: GLIDE_MS, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
@@ -252,18 +252,19 @@ export function SpaceCanvas({ space, bots, knownThreads = NO_KNOWN, activeChat =
         const hierarchy = chiefs.length > 0 && others.length > 0;
         const columns = Math.min(tileColumns(tile.w), Math.max(1, inside.length));
         const renderSlot = (slot: SpaceSlot) => {
-          const isSelected = activeChat
-            ? (slot.threadId ? activeChat.threadId === slot.threadId : Boolean(goal) && activeChat.botId === slot.bot.id && !activeChat.threadId)
-            : (state.selectedId === slot.bot.id && state.settingsOpen);
+          const isSelected = goal
+            ? Boolean(activeChat && (slot.threadId ? activeChat.threadId === slot.threadId : activeChat.botId === slot.bot.id && !activeChat.threadId))
+            : (!activeChat && state.selectedId === slot.bot.id && state.settingsOpen);
           const isMoving = Boolean(goal && drag?.item.kind === "bot" && drag.item.fromGoalId === goal.id && (
             drag.item.threadId ? drag.item.threadId === slot.threadId : drag.item.botId === slot.bot.id
           ));
           const cardSubtitle = goal ? (slot.title || goal.title) : undefined;
+          const cardBot = goal ? slotBot(slot) : slot.bot;
           return <div key={slot.id} data-space-card={slot.bot.id} data-space-thread={slot.threadId} data-space-in={tile.key}
             data-drag-bot={slot.bot.id} data-drag-thread={slot.threadId} data-drag-from={goal?.id}
             className="relative cursor-grab touch-none active:cursor-grabbing"
             onContextMenu={(event) => { if (!goal) return; event.preventDefault(); event.stopPropagation(); actions.menu(event, goal, slot.bot, slot.threadId); }}>
-            <BotCard bot={slot.bot} subtitle={cardSubtitle} selected={isSelected} moving={isMoving} connected={false} onSelect={() => actions.openCard(slot, goal)} />
+            <BotCard bot={cardBot} subtitle={cardSubtitle} selected={isSelected} moving={isMoving} connected={false} onSelect={goal ? () => actions.openCard(slot, goal) : undefined} />
           </div>;
         };
         return <section key={tile.key} data-space-key={tile.key} data-goal-zone={goal?.id} data-level={goal?.level} data-dropping={dropping || undefined}

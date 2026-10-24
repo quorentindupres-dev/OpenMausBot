@@ -87,7 +87,13 @@ export function spaceThreads(space: SpaceState, bots: readonly Bot[], goalId: st
   const seen = new Set<string>();
   const list: SpaceThread[] = [];
   for (const bot of bots) {
-    for (const task of bot.tasks ?? []) {
+    const tasks = [...(bot.tasks ?? [])]
+      .map((task, index) => ({ task, index }))
+      .sort((a, b) => (a.task.createdAt !== undefined && b.task.createdAt !== undefined
+        ? a.task.createdAt - b.task.createdAt || b.index - a.index
+        : a.index - b.index))
+      .map((entry) => entry.task);
+    for (const task of tasks) {
       if (threadGoalOf(space, known, task.threadId) === goalId && !task.archivedAt) {
         seen.add(task.threadId);
         list.push({ bot, threadId: task.threadId, title: task.title });
@@ -105,6 +111,11 @@ export function spaceThreads(space: SpaceState, bots: readonly Bot[], goalId: st
 export function spaceSlots(space: SpaceState, bots: readonly Bot[], goalId: string, known: Readonly<Record<string, KnownThread>> = {}): SpaceSlot[] {
   const threads = spaceThreads(space, bots, goalId, known);
   const threadedBots = new Set(threads.map((item) => item.bot.id));
+  for (const bot of bots) {
+    if ((bot.tasks ?? []).some((task) => threadGoalOf(space, known, task.threadId) === goalId)) {
+      threadedBots.add(bot.id);
+    }
+  }
   const slots: SpaceSlot[] = threads.map((item) => ({ id: item.threadId, bot: item.bot, threadId: item.threadId, title: item.title }));
   for (const bot of bots) {
     if (space.placements[bot.id] === goalId && !threadedBots.has(bot.id)) {
@@ -112,6 +123,19 @@ export function spaceSlots(space: SpaceState, bots: readonly Bot[], goalId: stri
     }
   }
   return slots;
+}
+
+export function slotBot(slot: SpaceSlot): Bot {
+  if (!slot.threadId) return slot.bot;
+  const task = slot.bot.tasks?.find((candidate) => candidate.threadId === slot.threadId);
+  if (!task) return slot.bot;
+  return {
+    ...slot.bot,
+    threadId: task.threadId,
+    ...(task.modelSelection ? { modelSelection: task.modelSelection } : {}),
+    ...(task.activity ? { activity: task.activity } : {}),
+    ...(task.busy !== undefined ? { busy: task.busy } : {}),
+  };
 }
 
 export function zoneBots(space: SpaceState, bots: readonly Bot[], goalId: string, known: Readonly<Record<string, KnownThread>> = {}): Bot[] {

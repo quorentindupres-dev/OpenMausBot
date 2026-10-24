@@ -33,6 +33,16 @@ describe("quest board helpers", () => {
       ["a", "t3"],
       ["b", null],
     ]);
+    // Server stores newest tasks first in bot.tasks; spaceThreads keeps creation order and archived threads never resurrect zombie placements.
+    const serverOrdered = [
+      { id: "a", name: "A", tasks: [{ threadId: "t-newer", title: "Goal #2", createdAt: 20 }, { threadId: "t-older", title: "Goal", createdAt: 10 }] },
+      { id: "c", name: "C", tasks: [{ threadId: "t-closed", title: "Closed", createdAt: 5, archivedAt: 30 }] },
+    ] as unknown as Bot[];
+    const state2 = { ...EMPTY_SPACE, placements: { a: "g", c: "g" }, threadGoals: { "t-newer": "g", "t-older": "g", "t-closed": "g" } };
+    expect(spaceSlots(state2, serverOrdered, "g").map((slot) => [slot.bot.id, slot.threadId ?? null, slot.title ?? null])).toEqual([
+      ["a", "t-older", "Goal"],
+      ["a", "t-newer", "Goal #2"],
+    ]);
   });
 
   it("orders active goals first, then by their order", () => {
