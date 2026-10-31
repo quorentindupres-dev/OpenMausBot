@@ -9,6 +9,8 @@ import type { SharedComputers } from "../../shared-computers.ts";
 import { AgentComputerError } from "../errors.ts";
 import {
   buildCleanRemoteShellCommand,
+  parseCuaDesktopStateOutput,
+  REMOTE_CUA_DRIVER_RESOLVER,
   type ComputerProviderAdapter,
   type ExecCommandInput,
   type ExecCommandResult,
@@ -21,9 +23,6 @@ import {
 export interface Mac2SharedProviderOptions {
   sharedComputers?: SharedComputers;
 }
-
-const REMOTE_CUA_DRIVER_RESOLVER =
-  'for b in /usr/local/bin/cua-driver "$HOME/.local/bin/cua-driver" /Applications/CuaDriver.app/Contents/MacOS/cua-driver; do if [ -x "$b" ]; then CUA_BIN="$b"; break; fi; done; if [ -z "${CUA_BIN:-}" ]; then echo "cua-driver not found on Mac #2" >&2; exit 127; fi';
 
 function resolveSshTarget(config: Mac2HostConfig): string | null {
   if (config.sshAlias) return config.sshAlias;
@@ -145,7 +144,7 @@ export class Mac2SharedProvider implements ComputerProviderAdapter {
             available: true,
             state: "ready",
             reasonCode: "ok",
-            message: `${config.name} is online over Tailscale SSH (${sshTarget}).`,
+            message: `${config.name} is online over SSH (${sshTarget}).`,
             nextStep: null,
             activeLeases,
             maxCapacity: 1,
@@ -163,9 +162,9 @@ export class Mac2SharedProvider implements ComputerProviderAdapter {
       available: false,
       state: "host_offline",
       reasonCode: "host_offline",
-      message: `${config.name} is offline or unreachable over SharedComputers / Tailscale.`,
+      message: `${config.name} is offline or unreachable over SharedComputers / SSH.`,
       nextStep:
-        "Ensure the 2nd Mac is powered on AC, connected to Tailscale, and running LaunchAgent com.xlabs.agent-mac-host.",
+        "Ensure the 2nd Mac is powered on AC, reachable via Private LAN SSH (sshAlias) or SharedComputers, and running cua-driver.",
       activeLeases,
       maxCapacity: 1,
       supportedOs: ["macos"],
@@ -355,13 +354,16 @@ export class Mac2SharedProvider implements ComputerProviderAdapter {
     if (out.exitCode !== 0) {
       throw new AgentComputerError(
         "COMMAND_FAILED",
-        `Mac #2 screenshot failed: ${out.stderr.trim() || `exit ${out.exitCode}`}`,
-        "Verify Screen Recording permission for cua-driver on Mac #2.",
+        `Mac #2 screenshot failed: ${out.stderr.trim() || out.stdout.trim() || `exit ${out.exitCode}`}`,
+        "Wake the 2nd Mac display or run `cua-driver permissions grant` on Mac #2 to grant Screen Recording.",
       );
     }
+    const decoded = parseCuaDesktopStateOutput(out.stdout);
     return {
-      mimeType: "image/png",
-      base64Data: out.stdout.trim(),
+      mimeType: decoded.mimeType,
+      base64Data: decoded.base64Data,
+      ...(decoded.width !== undefined ? { width: decoded.width } : {}),
+      ...(decoded.height !== undefined ? { height: decoded.height } : {}),
       vncPreviewUrl: config.tailscaleHost ? `vnc://${config.tailscaleHost}:5900` : null,
       capturedAt: context.now(),
     };

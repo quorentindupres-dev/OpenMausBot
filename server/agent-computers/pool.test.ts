@@ -218,7 +218,7 @@ describe("AgentComputerPool & Cua.ai providers", () => {
   it("clones and wipes Temporary VMs on session close, while Long-Term VMs persist and snapshot/stop cleanly", async () => {
     store.updateMac2Config({
       tailscaleHost: "mac2.tailnet.ts.net",
-      sshUser: "gregorio",
+      sshUser: "operator",
       maxConcurrentVms: 4,
       snapshotOnLongTermStop: true,
     });
@@ -272,7 +272,7 @@ describe("AgentComputerPool & Cua.ai providers", () => {
       toolSurface: "cua-driver",
       command: "ssh",
     });
-    expect(mcp?.args).toContain("gregorio@mac2.tailnet.ts.net");
+    expect(mcp?.args).toContain("operator@mac2.tailnet.ts.net");
     expect(mcp?.args?.slice(-2)).toEqual(["cua-driver", "mcp"]);
 
     const execOut = await pool.execCommand(tempLease.leaseId, { command: "sw_vers" });
@@ -281,6 +281,7 @@ describe("AgentComputerPool & Cua.ai providers", () => {
 
     const shot = await pool.screenshotPreview(tempLease.leaseId);
     expect(shot.base64Data).toBe("iVBORw0KGgoAAAANSUhEUg==");
+    expect(shellCalls[1]?.args?.join(" ")).toContain("get_desktop_state");
 
     const closedTemp = await pool.closeSession(tempLease.leaseId);
     expect(closedTemp.state).toBe("destroyed");
@@ -519,7 +520,7 @@ describe("AgentComputerPool & Cua.ai providers", () => {
     sharedComputers.register(
       {
         id: sharedId,
-        name: "Gregorio Mac #2",
+        name: "Secondary Mac Host",
         environmentId: envId,
         folders: [],
         terminal: true,
@@ -527,12 +528,12 @@ describe("AgentComputerPool & Cua.ai providers", () => {
         platform: "darwin",
         commandTimeouts: true,
       },
-      { session: "sess-1", person: "gregorio" },
+      { session: "sess-1", person: "operator" },
       secret,
     );
     store.updateMac2Config({
       sharedComputerId: sharedId,
-      sharedOwnerPerson: "gregorio",
+      sharedOwnerPerson: "operator",
     });
 
     // 3. Orgo REST mock
@@ -655,9 +656,9 @@ describe("AgentComputerPool & Cua.ai providers", () => {
         mode: "long-term",
         agentId: "fallback-id",
         role: "Creative Scout",
-        project: "Precision Peptides",
+        project: "Acme Brand",
       }),
-    ).toBe("a01-creative-scout-precision-peptides");
+    ).toBe("a01-creative-scout-acme-brand");
   });
 
   it("validates scripts/setup-agent-mac.sh syntax, --help, and --dry-run bootstrap", async () => {

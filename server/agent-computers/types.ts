@@ -98,6 +98,47 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+export const REMOTE_CUA_DRIVER_RESOLVER =
+  'for b in "$HOME/.local/bin/cua-driver" /opt/homebrew/bin/cua-driver /usr/local/bin/cua-driver /Applications/CuaDriver.app/Contents/MacOS/cua-driver; do if [ -x "$b" ]; then CUA_BIN="$b"; break; fi; done; if [ -z "${CUA_BIN:-}" ]; then echo "cua-driver not found on remote host" >&2; exit 127; fi';
+
+/** Parses `cua-driver call get_desktop_state '{}'` output across raw base64, direct JSON, and MCP content-array envelopes. */
+export function parseCuaDesktopStateOutput(rawStdout: string): {
+  base64Data: string;
+  mimeType: "image/png" | "image/jpeg";
+  width?: number;
+  height?: number;
+} {
+  const raw = rawStdout.trim();
+  if (!raw.startsWith("{")) {
+    return { base64Data: raw, mimeType: "image/png" };
+  }
+  const parsed = JSON.parse(raw) as {
+    data?: string;
+    image?: string;
+    base64?: string;
+    screenshot?: string;
+    mimeType?: string;
+    mime_type?: string;
+    width?: number;
+    height?: number;
+    content?: Array<{ type?: string; data?: string; mimeType?: string; mime_type?: string }>;
+  };
+  const imageItem = Array.isArray(parsed.content)
+    ? parsed.content.find((item) => item?.type === "image" && typeof item.data === "string")
+    : undefined;
+  const base64Data =
+    imageItem?.data ?? parsed.data ?? parsed.image ?? parsed.base64 ?? parsed.screenshot ?? "";
+  const rawMime = imageItem?.mimeType ?? imageItem?.mime_type ?? parsed.mimeType ?? parsed.mime_type;
+  const mimeType: "image/png" | "image/jpeg" =
+    rawMime === "image/jpeg" ? "image/jpeg" : "image/png";
+  return {
+    base64Data,
+    mimeType,
+    ...(typeof parsed.width === "number" ? { width: parsed.width } : {}),
+    ...(typeof parsed.height === "number" ? { height: parsed.height } : {}),
+  };
+}
+
 /** Wraps a remote command in a clean minimal environment so host daemon tokens never leak into guest processes. */
 export function buildCleanRemoteShellCommand(command: string, cwd?: string): string {
   const body = cwd ? `cd ${shellQuote(cwd)} && ${command}` : command;
@@ -105,7 +146,7 @@ export function buildCleanRemoteShellCommand(command: string, cwd?: string): str
     "env -i",
     'HOME="${HOME:-/tmp}"',
     'USER="${USER:-agent}"',
-    'PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
+    'PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
     'LANG="en_US.UTF-8"',
     "/bin/sh -c",
     shellQuote(body),
