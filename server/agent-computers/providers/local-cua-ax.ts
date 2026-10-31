@@ -9,6 +9,7 @@ import { desktopComputer, thisComputerNotReady, type DesktopComputer } from "../
 import { AgentComputerError } from "../errors.ts";
 import {
   buildCleanRemoteShellCommand,
+  parseCuaDesktopStateOutput,
   type ComputerProviderAdapter,
   type ExecCommandInput,
   type ExecCommandResult,
@@ -180,7 +181,7 @@ export class LocalCuaAxProvider implements ComputerProviderAdapter {
     const socketPath = extractSocketPath(connection.args);
     const callArgs = [
       "call",
-      "screenshot",
+      "get_desktop_state",
       "{}",
       ...(socketPath ? ["--socket", socketPath] : []),
     ];
@@ -195,22 +196,12 @@ export class LocalCuaAxProvider implements ComputerProviderAdapter {
         "Check Screen Recording permission for OpenMausBot in System Settings.",
       );
     }
-    const raw = out.stdout.trim();
-    let base64Data = raw;
-    let mimeType: "image/png" | "image/jpeg" = "image/png";
-    if (raw.startsWith("{")) {
-      const parsed = JSON.parse(raw) as {
-        data?: string;
-        image?: string;
-        base64?: string;
-        mimeType?: string;
-      };
-      base64Data = parsed.data ?? parsed.image ?? parsed.base64 ?? "";
-      if (parsed.mimeType === "image/jpeg") mimeType = "image/jpeg";
-    }
+    const decoded = parseCuaDesktopStateOutput(out.stdout);
     return {
-      mimeType,
-      base64Data,
+      mimeType: decoded.mimeType,
+      base64Data: decoded.base64Data,
+      ...(decoded.width !== undefined ? { width: decoded.width } : {}),
+      ...(decoded.height !== undefined ? { height: decoded.height } : {}),
       vncPreviewUrl: null,
       capturedAt: context.now(),
     };

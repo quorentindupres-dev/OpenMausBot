@@ -10,6 +10,8 @@ import {
 import { AgentComputerError } from "../errors.ts";
 import {
   buildCleanRemoteShellCommand,
+  parseCuaDesktopStateOutput,
+  REMOTE_CUA_DRIVER_RESOLVER,
   shellQuote,
   type ComputerProviderAdapter,
   type ExecCommandInput,
@@ -516,25 +518,22 @@ export class Mac2LumeVmProvider implements ComputerProviderAdapter {
     const sshArgs = this.buildGuestSshArgs(
       lease,
       context.mac2Config,
-      "cua-driver call screenshot '{}'",
+      `${REMOTE_CUA_DRIVER_RESOLVER}; exec "$CUA_BIN" call get_desktop_state '{}'`,
     );
     const out = await context.runShell("ssh", sshArgs, { timeoutMs: 15_000 });
     if (out.exitCode !== 0) {
       throw new AgentComputerError(
         "COMMAND_FAILED",
-        `Lume VM '${lease.instanceId}' screenshot failed: ${out.stderr.trim() || `exit ${out.exitCode}`}`,
+        `Lume VM '${lease.instanceId}' screenshot failed: ${out.stderr.trim() || out.stdout.trim() || `exit ${out.exitCode}`}`,
         "Verify cua-driver is running inside the guest VM template.",
       );
     }
-    const raw = out.stdout.trim();
-    let base64Data = raw;
-    if (raw.startsWith("{")) {
-      const parsed = JSON.parse(raw) as { data?: string; image?: string; base64?: string };
-      base64Data = parsed.data ?? parsed.image ?? parsed.base64 ?? "";
-    }
+    const decoded = parseCuaDesktopStateOutput(out.stdout);
     return {
-      mimeType: "image/png",
-      base64Data,
+      mimeType: decoded.mimeType,
+      base64Data: decoded.base64Data,
+      ...(decoded.width !== undefined ? { width: decoded.width } : {}),
+      ...(decoded.height !== undefined ? { height: decoded.height } : {}),
       vncPreviewUrl: lease.vncPreviewUrl,
       capturedAt: context.now(),
     };
