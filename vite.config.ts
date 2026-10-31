@@ -53,9 +53,14 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@xlabs/space-canvas": fileURLToPath(new URL("../G_app-Space-Canvas/src", import.meta.url)),
     },
+    dedupe: ["react", "react-dom", "lucide-react"],
   },
   server: {
+    fs: {
+      allow: [root, fileURLToPath(new URL("../G_app-Space-Canvas", import.meta.url))],
+    },
     // IPv4 explicitly — a bare ::1 bind makes localhost a coin-flip for
     // clients that resolve IPv4 first
     host: "127.0.0.1",

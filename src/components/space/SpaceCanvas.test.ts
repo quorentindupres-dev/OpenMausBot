@@ -4,147 +4,201 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { setLocale } from "@/lib/i18n";
-import { EMPTY_SPACE, normalizeGoal, type SpaceState } from "../../../shared/space";
+import { EMPTY_SPACE, normalizeGoal } from "../../../shared/space";
+import type { BoardState } from "./space-api";
+import {
+  SpaceCanvas,
+  resetPinnedStoreForTests,
+  type SpaceCanvasHostAdapter,
+} from "./SpaceCanvas";
+import { toWhiteboardSpaceState } from "./whiteboard-bridge";
 
-vi.mock("@/state/store", () => ({
-  useStore: () => ({ state: { instances: [], selectedId: null, settingsOpen: false }, dispatch: vi.fn() }),
-}));
-vi.mock("../TeamCanvas", () => ({
-  BotCard: ({ bot }: { bot: { id: string; name: string } }) => createElement("div", { "data-bot-card": bot.id }, bot.name),
-}));
-
-import { SpaceCanvas, type SpaceCanvasActions } from "./SpaceCanvas";
-
-let host: HTMLDivElement;
+let hostEl: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
-  setLocale("en");
+  resetPinnedStoreForTests();
   Element.prototype.setPointerCapture = () => {};
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
+  hostEl = document.createElement("div");
+  document.body.append(hostEl);
+  root = createRoot(hostEl);
 });
 
 afterEach(() => {
   flushSync(() => root.unmount());
-  host.remove();
+  hostEl.remove();
+  resetPinnedStoreForTests();
 });
 
-function makeActions(overrides: Partial<SpaceCanvasActions> = {}): SpaceCanvasActions {
-  return {
-    moveTile: vi.fn(),
-    open: vi.fn(),
-    openCard: vi.fn(),
-    menu: vi.fn(),
-    pickLevel: vi.fn(),
-    canvasMenu: vi.fn(),
-    newSpaceAt: vi.fn(),
-    addAgent: vi.fn(),
-    rename: vi.fn(),
-    setIcon: vi.fn(),
-    patchNote: vi.fn(),
-    deleteNote: vi.fn(),
-    ...overrides,
-  };
-}
-
-describe("SpaceCanvas goal avatars and canvas notes", () => {
-  it("renders emoji and image data URL avatars on Space tiles and lets the user pick or clear an icon", () => {
-    const dataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-    const space: SpaceState = {
+describe("SpaceCanvas (@xlabs/space-canvas SpaceWhiteboard wrapper)", () => {
+  it("renders Space tiles with emoji & custom data-URL icons, sticky notes, and C02 project header badge", () => {
+    const dataUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const board: BoardState = {
       ...EMPTY_SPACE,
       goals: [
-        normalizeGoal({ id: "g-emoji", title: "Emoji Space", icon: "🚀", layout: { x: 40, y: 40, w: 280, h: 220 } }),
-        normalizeGoal({ id: "g-img", title: "Image Space", icon: dataUrl, layout: { x: 360, y: 40, w: 280, h: 220 } }),
+        normalizeGoal({ id: "g-emoji", title: "Emoji Space", icon: "🚀", level: "P1", layout: { x: 40, y: 40, w: 320, h: 220 } }),
+        normalizeGoal({ id: "g-img", title: "Image Space", icon: dataUrl, level: "P2", layout: { x: 400, y: 40, w: 320, h: 220 } }),
       ],
-    };
-    const actions = makeActions();
-    flushSync(() =>
-      root.render(
-        createElement(SpaceCanvas, {
-          space,
-          bots: [],
-          actions,
-          drag: null,
-          editingTitle: null,
-          onTitleDone: () => {},
-          toCanvasRef: { current: null },
-        }),
-      ),
-    );
-
-    const emojiBadge = host.querySelector<HTMLButtonElement>('[data-goal-avatar="g-emoji"]')!;
-    expect(emojiBadge.textContent).toBe("🚀");
-
-    const imgBadge = host.querySelector<HTMLButtonElement>('[data-goal-avatar="g-img"]')!;
-    const img = imgBadge.querySelector("img")!;
-    expect(img).not.toBeNull();
-    expect(img.getAttribute("src")).toBe(dataUrl);
-
-    flushSync(() => emojiBadge.click());
-    const popover = document.querySelector<HTMLElement>('[data-goal-avatar-menu="g-emoji"]')!;
-    expect(popover).not.toBeNull();
-    flushSync(() => popover.querySelector<HTMLButtonElement>('[data-goal-emoji="🔥"]')!.click());
-    expect(actions.setIcon).toHaveBeenCalledWith(expect.objectContaining({ id: "g-emoji" }), "🔥");
-  });
-
-  it("renders canvas notes at their (x, y, w, h) layout with their text and color, and supports editing and deleting", () => {
-    const space: SpaceState = {
-      ...EMPTY_SPACE,
-      goals: [normalizeGoal({ id: "g1", title: "Main", layout: { x: 40, y: 40, w: 280, h: 220 } })],
       canvasNotes: [
         {
           id: "note-1",
           text: "Launch checklist",
           color: "blue",
-          layout: { x: 420, y: 160, w: 240, h: 180 },
+          layout: { x: 420, y: 300, w: 240, h: 180 },
           createdAt: 1,
           updatedAt: 1,
         },
       ],
     };
-    const actions = makeActions();
+    const wb = toWhiteboardSpaceState({ board, bots: [], activeProjectSlug: "surge" });
+    const onSelectSpaceProject = vi.fn();
+    const adapter: SpaceCanvasHostAdapter = {
+      activeProjectSlug: "surge",
+      projects: [
+        { slug: "surge", title: "Surge", readiness: "green", readinessScore: 100, productsCount: 2, channels: ["Meta Paid"], liveRefs: [] },
+        { slug: "x-labs", title: "X-Labs", readiness: "green", readinessScore: 100, productsCount: 1, channels: ["Direct"], liveRefs: [] },
+      ],
+      onSelectSpaceProject,
+    };
+
     flushSync(() =>
       root.render(
         createElement(SpaceCanvas, {
-          space,
-          bots: [],
-          actions,
-          drag: null,
-          editingTitle: null,
-          onTitleDone: () => {},
-          toCanvasRef: { current: null },
+          space: wb,
+          agents: [],
+          host: adapter,
+          dark: true,
+          onChangeSpace: vi.fn(),
         }),
       ),
     );
 
-    const noteEl = host.querySelector<HTMLElement>('[data-canvas-note="note-1"]')!;
-    expect(noteEl).not.toBeNull();
-    expect(noteEl.dataset.noteColor).toBe("blue");
-    expect(noteEl.style.left).toBe("420px");
-    expect(noteEl.style.top).toBe("160px");
-    expect(noteEl.style.width).toBe("240px");
-    expect(noteEl.style.height).toBe("180px");
+    const emojiTile = hostEl.querySelector<HTMLElement>('[data-space-tile="g-emoji"]')!;
+    expect(emojiTile).not.toBeNull();
+    expect(emojiTile.textContent).toContain("🚀");
+    expect(emojiTile.textContent).toContain("Emoji Space");
 
-    const textarea = noteEl.querySelector<HTMLTextAreaElement>('[data-note-text="note-1"]')!;
-    expect(textarea.value).toBe("Launch checklist");
+    const imgTile = hostEl.querySelector<HTMLElement>('[data-space-tile="g-img"]')!;
+    expect(imgTile).not.toBeNull();
+    const img = imgTile.querySelector("img")!;
+    expect(img).not.toBeNull();
+    expect(img.getAttribute("src")).toBe(dataUrl);
 
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    const stickyEl = hostEl.querySelector<HTMLElement>('[data-space-sticky="note-1"]')!;
+    expect(stickyEl).not.toBeNull();
+    expect(stickyEl.textContent).toContain("Launch checklist");
+
+    const projectSelect = hostEl.querySelector<HTMLSelectElement>('[data-testid="space-project-select"]')!;
+    expect(projectSelect.value).toBe("surge");
     flushSync(() => {
-      setter.call(textarea, "Updated checklist");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      projectSelect.value = "x-labs";
+      projectSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    flushSync(() => {
-      textarea.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    expect(onSelectSpaceProject).toHaveBeenCalledWith("x-labs");
+  });
+
+  it("spawns a registered A01 role from A01RosterDrawer + A01SpawnPopover and places Session / C02 Project nodes", () => {
+    const board: BoardState = { ...EMPTY_SPACE };
+    let currentWb = toWhiteboardSpaceState({ board, bots: [], activeProjectSlug: "surge" });
+    const onSpawnA01Agent = vi.fn();
+    const onOpenSession = vi.fn();
+    const onPinSession = vi.fn();
+    const onSwitchNodeComputer = vi.fn();
+
+    const adapter: SpaceCanvasHostAdapter = {
+      activeProjectSlug: "surge",
+      sessions: [
+        {
+          sessionId: "pepper::th-1",
+          sessionKind: "openmanus-thread",
+          title: "Pepper · Hero fix",
+          roleId: "media-buyer",
+          agentName: "Pepper",
+          status: "working",
+          workingLine: "🧠 Long-Term · Auditing ad sets",
+          projectSlug: "surge",
+          computer: "mac2-lume-isolated",
+        },
+      ],
+      projects: [
+        {
+          slug: "surge",
+          title: "Surge",
+          readiness: "green",
+          readinessScore: 100,
+          productsCount: 3,
+          channels: ["Meta Ads", "TikTok Shop"],
+          liveRefs: [{ label: "Live Site", url: "https://acme-brand.example" }],
+        },
+      ],
+      onSpawnA01Agent,
+      onOpenSession,
+      onPinSession,
+      onSwitchNodeComputer,
+    };
+
+    const rerender = () => {
+      flushSync(() =>
+        root.render(
+          createElement(SpaceCanvas, {
+            space: currentWb,
+            agents: [],
+            host: adapter,
+            dark: true,
+            onChangeSpace: (updater) => {
+              currentWb = typeof updater === "function" ? updater(currentWb) : updater;
+              rerender();
+            },
+          }),
+        ),
+      );
+    };
+    rerender();
+
+    // 1. Open A01 Roster drawer & request spawn of Media Buyer
+    flushSync(() => hostEl.querySelector<HTMLButtonElement>('[data-testid="toggle-a01-roster"]')!.click());
+    expect(hostEl.querySelector('[data-testid="a01-roster-drawer"]')).not.toBeNull();
+    flushSync(() => hostEl.querySelector<HTMLButtonElement>('[data-testid="spawn-role-btn-media-buyer"]')!.click());
+
+    const popover = hostEl.querySelector<HTMLElement>('[data-testid="a01-spawn-popover"]')!;
+    expect(popover).not.toBeNull();
+    flushSync(() => popover.querySelector<HTMLButtonElement>('[data-testid="spawn-mode-long-term-employee"]')!.click());
+    flushSync(() => popover.querySelector<HTMLButtonElement>('[data-testid="spawn-computer-mac2-lume-isolated"]')!.click());
+    flushSync(() => popover.querySelector<HTMLButtonElement>('[data-testid="confirm-a01-spawn"]')!.click());
+
+    expect(onSpawnA01Agent).toHaveBeenCalledTimes(1);
+    expect(onSpawnA01Agent.mock.calls[0]![0]).toMatchObject({
+      roleId: "media-buyer",
+      spawnMode: "long-term-employee",
+      projectSlug: "surge",
+      computer: "mac2-lume-isolated",
     });
-    expect(actions.patchNote).toHaveBeenCalledWith("note-1", { text: "Updated checklist" });
+    expect(hostEl.querySelectorAll('[data-space-node-kind="agent"]')).toHaveLength(1);
 
-    flushSync(() => noteEl.querySelector<HTMLButtonElement>('[data-note-color-pick="pink"]')!.click());
-    expect(actions.patchNote).toHaveBeenCalledWith("note-1", { color: "pink" });
+    // 2. Open Sessions & Projects drawer, place session & C02 project card
+    flushSync(() => hostEl.querySelector<HTMLButtonElement>('[data-testid="toggle-session-drawer"]')!.click());
+    const sessionDrawer = hostEl.querySelector<HTMLElement>('[data-testid="session-project-drawer"]')!;
+    expect(sessionDrawer).not.toBeNull();
+    flushSync(() => sessionDrawer.querySelector<HTMLButtonElement>('[data-testid="place-session-pepper::th-1"]')!.click());
+    expect(hostEl.querySelectorAll('[data-space-node-kind="session"]')).toHaveLength(1);
 
-    flushSync(() => noteEl.querySelector<HTMLButtonElement>('[data-note-delete="note-1"]')!.click());
-    expect(actions.deleteNote).toHaveBeenCalledWith("note-1");
+    const sessionNodeEl = hostEl.querySelector<HTMLElement>('[data-space-node-kind="session"]')!;
+    const sessionNodeId = sessionNodeEl.getAttribute("data-space-node")!;
+    flushSync(() => sessionNodeEl.querySelector<HTMLButtonElement>(`[data-testid="open-session-${sessionNodeId}"]`)!.click());
+    expect(onOpenSession).toHaveBeenCalledWith("pepper::th-1", "openmanus-thread");
+
+    flushSync(() => sessionNodeEl.querySelector<HTMLButtonElement>(`[data-testid="pin-session-${sessionNodeId}"]`)!.click());
+    expect(onPinSession).toHaveBeenCalledWith("pepper::th-1", true, expect.objectContaining({ sessionId: "pepper::th-1" }));
+
+    flushSync(() => sessionNodeEl.querySelector<HTMLButtonElement>(`[data-testid="switch-computer-${sessionNodeId}"]`)!.click());
+    expect(onSwitchNodeComputer).toHaveBeenCalledWith(sessionNodeId, expect.any(String));
+
+    // Place C02 project card via header quick button
+    flushSync(() => hostEl.querySelector<HTMLButtonElement>('[data-testid="drop-active-project-card"]')!.click());
+    const projectNodeEl = hostEl.querySelector<HTMLElement>('[data-space-node-kind="project"]')!;
+    expect(projectNodeEl).not.toBeNull();
+    expect(projectNodeEl.textContent).toContain("Surge");
+    expect(projectNodeEl.textContent).toContain("Meta Ads");
   });
 });

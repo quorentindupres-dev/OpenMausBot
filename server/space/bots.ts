@@ -1,4 +1,15 @@
-export type SpaceBot = { id: string; name: string; title?: string; chiefOfStaff?: boolean; tasks?: ReadonlyArray<{ threadId: string; title?: string }> };
+import type { A01BindingMode } from "../../shared/space.ts";
+
+export type SpaceBot = {
+  id: string;
+  name: string;
+  title?: string;
+  chiefOfStaff?: boolean;
+  a01Role?: string;
+  a01Mode?: A01BindingMode;
+  projectSlug?: string;
+  tasks?: ReadonlyArray<{ threadId: string; title?: string }>;
+};
 
 let bots: () => readonly SpaceBot[] = () => [];
 

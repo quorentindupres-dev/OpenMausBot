@@ -32,6 +32,7 @@ import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { SharePresetDialog } from "./SharePresetDialog";
 import { SettingRow } from "./SettingsPrimitives";
 import { Select } from "./Select";
+import { A01NewBotSection, bindCreatedBotA01IfSelected } from "./space/A01NewBotSection";
 
 const SECTIONS = ["Identity", "Soul", "Skills", "Memory", "Routines", "Access", "Model", "Permissions", "Voice & alerts"] as const;
 type Section = typeof SECTIONS[number];
@@ -122,6 +123,7 @@ export function NewBotDialog({ defaultsMode = false, onClose, onCreated, readyBo
         const { bot, warnings } = await createConfiguredBot(draft, undefined, undefined, undefined, visibility?.ok ? visibility.visibility : undefined,
           team ? reportsToFor(chosenOwner, draft.bot.section, parent.state.bots, team) ?? undefined : undefined);
         announceNewBot(parent.dispatch, bot, warnings, { showThreads, source: draft.preset ? "preset" : draft.role ? "template" : "blank", role: draft.role });
+        await bindCreatedBotA01IfSelected(draft, bot.id);
         try { await onCreated?.(bot); }
         catch (cause) { parent.dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }); }
       }
@@ -230,6 +232,7 @@ function DraftSection({ active, draft, defaultsMode, owner }: { active: Section;
   const derived = useBotSettingsDerived(bot);
   if (active === "Identity") return <div className="space-y-4">
     <StartingRole draft={draft} defaultsMode={defaultsMode} />
+    {!defaultsMode && <A01NewBotSection draft={draft} />}
     <IdentitySection bot={bot} patch={derived.patch} activeState={derived.activeState} mascotMotion={null}
       namePlaceholder={defaultsMode ? t("newBot.randomName") : undefined} />
     <label className="block text-[13px] text-ink-secondary">{t("newBot.team")}

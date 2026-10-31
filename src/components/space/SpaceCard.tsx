@@ -121,7 +121,7 @@ export function SpaceCard({ goal, bots, allBots, threads, notes, actions, fill =
               {[...bots, ...allBots.filter((bot) => bot.id === task.botId && !bots.includes(bot))].map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
             </select>
             <button type="button" aria-label={t("quest.task.delete", { task: task.text })} onClick={() => actions.deleteTask(task.id)}
-              className="rounded p-0.5 text-ink-tertiary opacity-0 hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"><X size={12} /></button>
+              className="rounded p-0.5 text-ink-tertiary opacity-0 hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 touch:opacity-100"><X size={12} /></button>
           </div>
         ))}
         <form onSubmit={submitTask} className="flex gap-1">

@@ -2,12 +2,39 @@
 import type { ToolCallContext, ToolCallResult } from "./agents-call.ts";
 import type { Json } from "./agents-client.ts";
 
-export const SPACE_TOOL_NAMES: ReadonlySet<string> = new Set(["space_status", "space_note"]);
+export const SPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "space_status",
+  "space_note",
+  "a01_lookup",
+  "c02_project_lookup",
+]);
 
 export async function callSpaceTool(name: string, args: Json, context: ToolCallContext): Promise<ToolCallResult> {
   if (name === "space_status") {
     const { ok, body } = await context.client.apiResponse("/api/internal/space/status", { method: "GET" });
     return ok ? { text: String(body.text ?? "") } : { text: String(body.error ?? "Could not read the board."), isError: true };
+  }
+  if (name === "a01_lookup") {
+    const { ok, body } = await context.client.apiResponse("/api/internal/space/a01-lookup", {
+      method: "POST",
+      body: JSON.stringify({
+        action: args.action,
+        ...(typeof args.role === "string" ? { role: args.role } : {}),
+        ...(typeof args.query === "string" ? { query: args.query } : {}),
+      }),
+    });
+    return ok ? { text: String(body.text ?? "") } : { text: String(body.error ?? "Could not query A01 fleet database."), isError: true };
+  }
+  if (name === "c02_project_lookup") {
+    const { ok, body } = await context.client.apiResponse("/api/internal/space/c02-lookup", {
+      method: "POST",
+      body: JSON.stringify({
+        action: args.action,
+        ...(typeof args.slug === "string" ? { slug: args.slug } : {}),
+        ...(typeof args.query === "string" ? { query: args.query } : {}),
+      }),
+    });
+    return ok ? { text: String(body.text ?? "") } : { text: String(body.error ?? "Could not query C02 project database."), isError: true };
   }
   const outcome = typeof args.outcome === "number" ? args.outcome - 1 : undefined;
   const { ok, body } = await context.client.apiResponse("/api/internal/space/note", {
@@ -45,6 +72,36 @@ export const SPACE_TOOL_DEFINITIONS = [
         for_bot_id: { type: "string", description: "With kind ask: the teammate who would do it." },
       },
       required: ["text"],
+    },
+  },
+  {
+    name: "a01_lookup",
+    description:
+      "Fast SQLite lookup in A01__team/team.db for role cards, EV formulas, standing rules, workflows, or FTS5 search without crawling folders.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: { type: "string", enum: ["search", "formula", "rules", "card"] },
+        role: { type: "string", maxLength: 200, description: "Registered A01 role id (e.g. EA, media-buyer, CREATIVE__scout)." },
+        query: { type: "string", maxLength: 500, description: "Search text or formula filter." },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "c02_project_lookup",
+    description:
+      "Fast SQLite lookup in C02__Project_database for business projects: list all projects, inspect a project's first-principles card, SKUs/offers, acquisition channels, 7-pillar readiness, folder routing (where), or auto-detect a project from a path/URL/job.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: { type: "string", enum: ["list", "card", "products", "acquisition", "readiness", "where", "detect"] },
+        slug: { type: "string", maxLength: 200, description: "C02 project slug (e.g. surge, precision-peptide, x-labs)." },
+        query: { type: "string", maxLength: 500, description: "Thing to locate for where, or path/URL/job for detect." },
+      },
+      required: ["action"],
     },
   },
 ];

@@ -17,7 +17,9 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@xlabs/space-canvas": ["../G_app-Space-Canvas/src/index.ts"],
+      "@xlabs/space-canvas/*": ["../G_app-Space-Canvas/src/*"]
     }
   },
   "include": ["src", "vite.config.ts"]

@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setLocale } from "@/lib/i18n";
 import { normalizeGoal } from "../../../shared/space";
+import { resetPinnedStoreForTests } from "./SpaceCanvas";
 
 const fixture = vi.hoisted(() => ({ api: vi.fn(), dispatch: vi.fn(), board: undefined as unknown }));
 vi.mock("@/state/store", () => ({
-  api: fixture.api, openBot: vi.fn(),
+  api: fixture.api,
+  openBot: vi.fn(),
   useStore: () => ({ state: { instances: [], selectedId: null, settingsOpen: false }, dispatch: fixture.dispatch }),
 }));
 vi.mock("../Avatar", () => ({ BotAvatar: () => null }));
@@ -20,272 +22,572 @@ vi.mock("../ChatView", () => ({
 
 import { QuestBoard } from "./QuestBoard";
 
-const board = () => ({
+const makeBoard = () => ({
   goals: [
     normalizeGoal({
-      id: "web", title: "Website up", level: "P1", goal: "Site converts like the old one",
-      outcomes: [{ text: "Lighthouse ≥ 90", done: false }, { text: "No 404", done: true }], roadmap: ["audit", "fix", "verify"],
+      id: "web",
+      title: "Website up",
+      level: "P1",
+      goal: "Site converts like the old one",
+      projectSlug: "surge",
+      outcomes: [
+        { text: "Lighthouse ≥ 90", done: false },
+        { text: "No 404", done: true },
+      ],
+      roadmap: ["audit", "fix", "verify"],
       tasks: [{ id: "t1", text: "Fix hero image", botId: "pepper", done: false, createdAt: 0 }],
       asks: [{ id: "a1", botId: "chief", text: "I can pick up the FAQ. Plan: draft, review", at: 0, status: "open" }],
-      layout: { x: 100, y: 80, w: 276, h: 300 },
+      layout: { x: 100, y: 80, w: 320, h: 280 },
     }),
-    normalizeGoal({ id: "sup", title: "Supplier signed", level: "P2" }),
-    normalizeGoal({ id: "logo", title: "Fix logo", level: "side" }),
+    normalizeGoal({ id: "sup", title: "Supplier signed", level: "P2", layout: { x: 460, y: 80, w: 320, h: 260 } }),
+    normalizeGoal({ id: "logo", title: "Fix logo", level: "side", layout: { x: 820, y: 80, w: 300, h: 220 } }),
   ],
   placements: { pepper: "web", warm: "logo" },
   threadGoals: { "th-1": "web" },
-  log: [{ id: "n1", goalId: "web", botId: "pepper", botName: "Pepper", at: 0, kind: "note", text: "hero swapped", signature: "— Pepper (pepper) · Website up · 2026-10-23T12:00:00.000Z" }],
+  log: [
+    {
+      id: "n1",
+      goalId: "web",
+      botId: "pepper",
+      botName: "Pepper",
+      at: 0,
+      kind: "note",
+      text: "hero swapped",
+      signature: "— Pepper (pepper) · Website up · 2026-10-23T12:00:00.000Z",
+    },
+  ],
   visualFirst: false,
   kanban: true,
+  canvasNotes: [] as Array<Record<string, unknown>>,
+  canvasArrows: [] as Array<Record<string, unknown>>,
+  canvasNodes: [] as Array<Record<string, unknown>>,
+  pinnedSessions: [] as string[],
+  botBindings: {
+    pepper: {
+      botId: "pepper",
+      role: "MARKETING__media-buying",
+      mode: "long-term",
+      projectSlug: "surge",
+      computerProvider: "mac2-lume-vm",
+      computerLeaseId: "lease-pepper-1",
+      boundAt: 1,
+    },
+  },
+  c02Projects: [
+    {
+      slug: "surge",
+      title: "Surge",
+      status: "active",
+      kind: "brand",
+      siteUrl: "https://acme-brand.example",
+      folderPath: "/Users/g/External-Vault/C02__Project_database/Surge",
+      workspaceRoots: ["/workspace/acme-brand"],
+      readinessStatus: "green",
+      readinessBadge: "🟢",
+      readinessScore: "7/7",
+      counts: { products: 2, acquisitionChannels: 2, funnels: 1 },
+    },
+    {
+      slug: "precision-peptide",
+      title: "Precision Peptide",
+      status: "active",
+      kind: "brand",
+      siteUrl: "https://vet-lab.example",
+      folderPath: "/Users/g/External-Vault/C02__Project_database/Precision-Peptide",
+      workspaceRoots: ["/Users/g/Code/precision"],
+      readinessStatus: "amber",
+      readinessBadge: "🟠",
+      readinessScore: "6/7",
+      counts: { products: 4, acquisitionChannels: 3, funnels: 2 },
+    },
+  ],
 });
-const bot = (id: string, extra: Record<string, unknown> = {}) => ({ id, name: id[0]!.toUpperCase() + id.slice(1), modelSelection: { instanceId: "", model: "" }, messages: [], ...extra });
-const bots = [bot("pepper", { busy: true, tasks: [{ threadId: "th-1", title: "Hero fix" }] }), bot("warm"), bot("chief", { chiefOfStaff: true })];
+
+const makeBot = (id: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  name: id[0]!.toUpperCase() + id.slice(1),
+  modelSelection: { instanceId: "", model: "" },
+  messages: [],
+  ...extra,
+});
+
+const bots = [
+  makeBot("pepper", { busy: true, tasks: [{ threadId: "th-1", title: "Hero fix" }] }),
+  makeBot("warm"),
+  makeBot("chief", { chiefOfStaff: true }),
+];
 
 let host: HTMLDivElement;
 let root: Root;
-let animations: string[];
-let under: Element | null;
 let threads = 0;
+
 beforeEach(() => {
   setLocale("en");
-  animations = [];
-  under = null;
+  resetPinnedStoreForTests();
   threads = 0;
-  HTMLElement.prototype.animate = function (this: HTMLElement) { animations.push(this.dataset.spaceCard ?? ""); return {} as Animation; } as never;
-  document.elementFromPoint = () => under;
   Element.prototype.setPointerCapture = () => {};
-  fixture.board = board();
+  fixture.board = makeBoard();
   fixture.dispatch.mockReset();
   fixture.api.mockReset();
+
   fixture.api.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
-    if (path === "/api/space") return fixture.board;
+    const current = fixture.board as ReturnType<typeof makeBoard>;
+    if (path === "/api/space") return current;
+    if (path === "/api/space/a01/roles") {
+      return {
+        roles: [
+          {
+            id: "EA",
+            name: "Executive Assistant",
+            group: "executive",
+            look: "ea",
+            lookMeta: {
+              key: "ea",
+              label: "Executive Assistant",
+              accessory: "headset",
+              layer: "front",
+              accent: "#6366f1",
+              archetype: "steward",
+              tagline: "Inbox, schedule, and daily bottlenecks",
+              badge: "AI employee",
+            },
+            kind: "main",
+            defaultTier: "steward",
+            parentRole: "",
+            openmausId: "ea",
+            mission: "Own daily prioritization & inbox triage",
+            northStar: "Zero dropped asks",
+            formulaCount: 3,
+            ruleCount: 8,
+            workflowCount: 4,
+            dbRefs: ["W93"],
+          },
+          {
+            id: "MARKETING__media-buying",
+            name: "Media Buyer",
+            group: "growth",
+            look: "media-buyer",
+            lookMeta: {
+              key: "media-buyer",
+              label: "Media Buyer",
+              accessory: "visor",
+              layer: "front",
+              accent: "#10b981",
+              archetype: "operator",
+              tagline: "Scale Meta & TikTok ROAS",
+              badge: "AI employee",
+            },
+            kind: "main",
+            defaultTier: "specialist",
+            parentRole: "",
+            openmausId: "media-buyer",
+            mission: "Scale ad spend profitably",
+            northStar: "Contribution margin",
+            formulaCount: 5,
+            ruleCount: 12,
+            workflowCount: 3,
+            dbRefs: ["W20"],
+          },
+        ],
+      };
+    }
+    if (path.startsWith("/api/space/a01/card/")) {
+      return {
+        card: {
+          id: "MARKETING__media-buying",
+          name: "Media Buyer",
+          group: "growth",
+          look: "media-buyer",
+          lookMeta: {
+            key: "media-buyer",
+            label: "Media Buyer",
+            accessory: "visor",
+            layer: "front",
+            accent: "#10b981",
+            archetype: "operator",
+            tagline: "Scale Meta & TikTok ROAS",
+            badge: "AI employee",
+          },
+          kind: "main",
+          mode: "long-term",
+          mission: "Scale ad spend profitably",
+          northStar: "Contribution margin",
+          formulas: [{ name: "ROAS", expression: "Rev / Spend", notes: "" }],
+          rules: [{ code: "R1", severity: "hard", statement: "Kill losers fast" }],
+          workflows: [{ id: "spend-loop", name: "Spend Loop", trigger: "daily", output: "report" }],
+          dbRefs: ["W20"],
+        },
+      };
+    }
+    if (path === "/api/space/c02/projects") {
+      return { projects: current.c02Projects };
+    }
+    if (path.startsWith("/api/space/c02/projects/")) {
+      const slug = decodeURIComponent(path.slice("/api/space/c02/projects/".length));
+      return {
+        project: {
+          slug,
+          title: slug === "precision-peptide" ? "Precision Peptide" : "Surge",
+          status: "active",
+          kind: "brand",
+          siteUrl: slug === "precision-peptide" ? "https://vet-lab.example" : "https://acme-brand.example",
+          folderPath: `/Users/g/External-Vault/C02__Project_database/${slug}`,
+          products: [{ slug: "p1", name: "Core Offer", kind: "physical", priceUsd: 59, cogsUsd: 11, frequency: "monthly", status: "live" }],
+          acquisitionChannels: [
+            { channel: "Meta Paid VSL", howWeGetClients: "Educational VSL -> Quiz", primaryFunnelSlug: "vsl", targetCacUsd: 29, status: "live" },
+          ],
+          funnels: [{ slug: "vsl", name: "Educational VSL", entryUrl: "https://acme-brand.example/vsl", stepsJson: "[]", targetCvrPct: 3.8 }],
+          unitEconomics: null,
+          readiness: { status: "green", badge: "🟢", score: "7/7", pillars: {}, missingPillars: [] },
+        },
+      };
+    }
+    if (path.startsWith("/api/space/c02/detect?")) {
+      return {
+        target: path,
+        matched: true,
+        slug: "precision-peptide",
+        title: "Precision Peptide",
+        kind: "brand",
+        matchedBy: "c01-job",
+        readinessStatus: "amber",
+        readinessScore: "6/7",
+        folderPath: "/Users/g/External-Vault/C02__Project_database/Precision-Peptide",
+      };
+    }
+    if (path === "/api/space/computers" && (!init?.method || init.method === "GET")) {
+      return {
+        providers: [],
+        leases: [
+          {
+            leaseId: "lease-pepper-1",
+            provider: "mac2-lume-vm",
+            agentId: "pepper",
+            mode: "long-term",
+            project: "surge",
+            os: "macos",
+            instanceName: "xlabs-lt-pepper",
+            state: "running",
+            hostEndpoint: "http://mac2.tailnet.ts.net:7777",
+            guestIp: "192.168.64.5",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+        mac2: {
+          enabled: true,
+          tailscaleHost: "mac2.tailnet.ts.net",
+          sshUser: "gregorio",
+          lumePort: 7777,
+          maxConcurrentVms: 3,
+          macosBaseImage: "xlabs-macos-base",
+        },
+        burstPolicy: { enabled: true },
+      };
+    }
+    if (path === "/api/space/computers/config" && init?.method === "PATCH") {
+      return { ok: true, mac2: JSON.parse(init.body!).mac2 };
+    }
     if (path === "/api/space/goals" && init?.method === "POST") {
-      const goal = normalizeGoal({ id: "new", ...JSON.parse(init.body!) });
-      const current = fixture.board as ReturnType<typeof board>;
+      const goal = normalizeGoal({ id: "new-goal", ...JSON.parse(init.body!) });
       fixture.board = { ...current, goals: [...current.goals, goal] };
       return { goal };
     }
+    if (path.startsWith("/api/space/goals/") && init?.method === "PATCH") {
+      const id = path.slice("/api/space/goals/".length);
+      const patch = JSON.parse(init.body!);
+      fixture.board = {
+        ...current,
+        goals: current.goals.map((g) => (g.id === id ? { ...g, ...patch } : g)),
+      };
+      return { goal: current.goals.find((g) => g.id === id) };
+    }
     if (path === "/api/space/scan") return { text: "Scan the Spaces board" };
-    if (path === "/api/bots") return { bot: bot("scout", { name: JSON.parse(init!.body!).name }) };
+    if (path === "/api/bots" && init?.method === "POST") {
+      const body = JSON.parse(init.body!);
+      return { bot: makeBot("hired-bot", { name: body.name, title: body.title, threadId: "th-hired" }) };
+    }
+    if (path.startsWith("/api/space/a01/bindings/") && init?.method === "PUT") {
+      const botId = decodeURIComponent(path.slice("/api/space/a01/bindings/".length));
+      const body = JSON.parse(init.body!);
+      const binding = {
+        botId,
+        role: body.role,
+        mode: body.mode,
+        projectSlug: body.projectSlug,
+        computerProvider: body.computerProvider,
+        computerLeaseId: "lease-new-1",
+        boundAt: 100,
+      };
+      fixture.board = {
+        ...current,
+        botBindings: { ...current.botBindings, [botId]: binding },
+      };
+      return { ok: true, binding };
+    }
+    if (path === "/api/space/canvas-notes" && init?.method === "POST") {
+      const body = JSON.parse(init.body!);
+      const note = {
+        id: "cn-1",
+        text: body.text ?? "",
+        color: body.color ?? "yellow",
+        layout: body.layout,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      fixture.board = { ...current, canvasNotes: [...(current.canvasNotes ?? []), note] };
+      return { note };
+    }
+    if (path === "/api/space/canvas-nodes" && init?.method === "POST") {
+      const body = JSON.parse(init.body!);
+      const node = { ...body, id: body.id ?? "node-1", createdAt: 1, updatedAt: 1 };
+      fixture.board = { ...current, canvasNodes: [...(current.canvasNodes ?? []), node] };
+      return { node };
+    }
+    if (path.startsWith("/api/space/canvas-nodes/") && init?.method === "PATCH") {
+      const nodeId = decodeURIComponent(path.slice("/api/space/canvas-nodes/".length));
+      const patch = JSON.parse(init.body!);
+      const nodes = [...(current.canvasNodes ?? [])];
+      const idx = nodes.findIndex((n) => n.id === nodeId);
+      if (idx >= 0) {
+        nodes[idx] = { ...nodes[idx], ...patch };
+        fixture.board = { ...current, canvasNodes: nodes };
+        return { node: nodes[idx] };
+      }
+      throw new Error("Node not found");
+    }
+    if (path === "/api/space/whiteboard/batch" && init?.method === "POST") {
+      const batch = JSON.parse(init.body!);
+      const nextNodes = [...(current.canvasNodes ?? []), ...(batch.addNodes ?? [])];
+      const nextNotes = [...(current.canvasNotes ?? []), ...(batch.addNotes ?? [])];
+      const nextArrows = [...(current.canvasArrows ?? []), ...(batch.addArrows ?? [])];
+      fixture.board = {
+        ...current,
+        canvasNodes: nextNodes,
+        canvasNotes: nextNotes,
+        canvasArrows: nextArrows,
+      };
+      return {
+        ok: true,
+        canvasNodes: nextNodes,
+        canvasNotes: nextNotes,
+        canvasArrows: nextArrows,
+        botBindings: current.botBindings,
+        goals: current.goals,
+      };
+    }
+    if (path === "/api/space/pinned-sessions" && init?.method === "PUT") {
+      const body = JSON.parse(init.body!);
+      fixture.board = { ...current, pinnedSessions: body.pinnedSessions };
+      return { pinnedSessions: body.pinnedSessions };
+    }
     if (/^\/api\/bots\/\w[\w-]*\/tasks$/.test(path)) {
       const threadId = threads++ === 0 ? "t-new" : `t-new-${threads}`;
       return { bot: {}, task: { threadId, title: init?.body ? JSON.parse(init.body).title : undefined } };
     }
     if (path === "/api/space/import-kanban") return { created: 2, updated: 1 };
-    if (path === "/api/space/canvas-notes" && init?.method === "POST") {
-      const body = JSON.parse(init.body!);
-      const note = { id: "cn-1", text: body.text ?? "", color: body.color ?? "yellow", layout: body.layout, createdAt: 1, updatedAt: 1 };
-      const current = fixture.board as ReturnType<typeof board> & { canvasNotes?: unknown[] };
-      fixture.board = { ...current, canvasNotes: [...(current.canvasNotes ?? []), note] };
-      return { note };
-    }
     return {};
   });
+
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { flushSync(() => root.unmount()); host.remove(); });
 
-const render = async () => {
+afterEach(() => {
+  flushSync(() => root.unmount());
+  host.remove();
+  resetPinnedStoreForTests();
+});
+
+const renderBoard = async () => {
   flushSync(() => root.render(createElement(QuestBoard, { bots: bots as never })));
-  await vi.waitFor(() => expect(host.querySelectorAll("[data-space-key]")).toHaveLength(4));
-};
-const tile = (key: string) => host.querySelector<HTMLElement>(`[data-space-key="${key}"]`)!;
-const canvas = () => host.querySelector<HTMLElement>("[data-space-canvas]")!;
-const drawer = () => host.querySelector<HTMLElement>("[data-space-drawer]")!;
-const part = (name: string) => drawer().querySelector<HTMLElement>(`[data-space-part="${name}"]`)!;
-const button = (scope: ParentNode, label: string) => [...scope.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === label || item.getAttribute("aria-label") === label)!;
-const calls = (path: string) => fixture.api.mock.calls.filter(([called]) => called === path).map(([, init]) => init);
-const pointer = (target: EventTarget, type: string, x: number, y: number) =>
-  target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 1, isPrimary: true, button: 0, buttons: type === "pointerup" ? 0 : 1 }));
-/** Presses `from`, moves past the threshold over `over`, and lets go there, as a mouse would. */
-const dragTo = (from: Element, over: Element | null) => {
-  flushSync(() => pointer(from, "pointerdown", 10, 10));
-  under = over;
-  flushSync(() => pointer(window, "pointermove", 30, 30));
-  flushSync(() => pointer(window, "pointermove", 60, 60));
-  flushSync(() => pointer(window, "pointerup", 60, 60));
+  await vi.waitFor(() => expect(host.querySelectorAll("[data-space-tile]")).toHaveLength(4));
 };
 
-describe("the Spaces map", () => {
-  it("draws every Space and the bench as tiles in their level's colors, with the bots' cards inside", async () => {
-    await render();
-    expect(tile("web").style.left).toBe("100px");
-    expect(tile("web").className).toContain("border-danger");
-    expect(tile("web").querySelector("span[data-level]")?.textContent).toBe("P1");
-    expect(tile("sup").className).toContain("border-warning");
-    expect(tile("logo").className).toContain("border-dashed");
-    expect(tile("web").textContent).toContain("Outcomes 1/2 · Open tasks 1 · Asks 1");
-    expect(tile("web").querySelector('[data-space-card="pepper"]')?.textContent).toContain("Pepper");
-    expect([...tile("bench").querySelectorAll("[data-space-card]")].map((card) => card.getAttribute("data-space-card"))).toEqual(["chief", "pepper", "warm"]);
-  });
+const calls = (path: string) =>
+  fixture.api.mock.calls.filter(([called]) => called === path).map(([, init]) => init);
 
-  it("lists one Space drag block and every agent with where it is on the shelf", async () => {
-    await render();
-    const shelf = host.querySelector("[data-space-palette]")!;
-    expect([...shelf.querySelectorAll("[data-drag-new]")].map((item) => item.textContent)).toEqual(["Space"]);
-    expect(shelf.querySelector('[data-palette-bot="pepper"]')?.textContent).toContain("in Website up");
-    expect(shelf.querySelector('[data-palette-bot="chief"]')?.textContent).toContain("on the bench");
-  });
+const buttonByText = (scope: ParentNode, label: string) =>
+  [...scope.querySelectorAll<HTMLButtonElement>("button")].find(
+    (item) => item.textContent?.trim() === label || item.getAttribute("aria-label") === label,
+  )!;
 
-  it("drags a Space from the shelf onto the map, names it, and picks its priority and size after", async () => {
-    await render();
-    dragTo(host.querySelector('[data-drag-new="general"]')!, canvas());
-    await vi.waitFor(() => expect(calls("/api/space/goals")).toHaveLength(1));
-    expect(JSON.parse(calls("/api/space/goals")[0].body)).toMatchObject({ title: "New Space", level: "general", layout: { x: expect.any(Number), y: expect.any(Number), w: 276 } });
-    await vi.waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("Space name"));
-    const input = document.activeElement as HTMLInputElement;
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    flushSync(() => { setter.call(input, "Launch ads"); input.dispatchEvent(new Event("input", { bubbles: true })); });
-    flushSync(() => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    await vi.waitFor(() => expect(calls("/api/space/goals/new")).toEqual([{ method: "PATCH", body: JSON.stringify({ title: "Launch ads" }) }]));
-    flushSync(() => tile("new").querySelector<HTMLButtonElement>("[data-level-picker]")!.click());
-    flushSync(() => button(document.querySelector("[data-quest-menu]")!, "P1").click());
-    await vi.waitFor(() => expect(calls("/api/space/goals/new").at(-1)).toEqual({ method: "PATCH", body: JSON.stringify({ level: "P1" }) }));
-  });
+describe("QuestBoard with Penpot-grade @xlabs/space-canvas Whiteboard", () => {
+  it("renders Spaces tiles, bench, plugin badge, Note creation, Chief scan, Kanban import, and Space details drawer", async () => {
+    await renderBoard();
 
-  it("resizes a Space by dragging its corner and keeps the bench's chief → members hierarchy", async () => {
-    fixture.board = { ...(fixture.board as ReturnType<typeof board>), placements: { pepper: "web" } };
-    await render();
-    expect(tile("bench").querySelector('[data-bench-lane="chiefs"] [data-space-card="chief"]')).not.toBeNull();
-    expect(tile("bench").querySelector("[data-bench-hierarchy]")).not.toBeNull();
-    expect(tile("bench").querySelector('[data-bench-lane="members"] [data-space-card="warm"]')).not.toBeNull();
-    const corner = tile("web").querySelector('[data-tile-resize="web"][data-resize-corner="se"]')!;
-    flushSync(() => pointer(corner, "pointerdown", 10, 10));
-    flushSync(() => pointer(canvas(), "pointermove", 160, 130));
-    flushSync(() => pointer(canvas(), "pointerup", 160, 130));
-    await vi.waitFor(() => expect(calls("/api/space/goals/web")).toHaveLength(1));
-    expect(JSON.parse(calls("/api/space/goals/web")[0].body).layout).toEqual({ x: 100, y: 80, w: 776, h: 700 });
-  });
-
-  it("drags an agent from the shelf onto a Space, and a card back to the shelf to bench it", async () => {
-    await render();
-    dragTo(host.querySelector('[data-palette-bot="chief"]')!, tile("sup").querySelector("header")!);
-    await vi.waitFor(() => expect(calls("/api/space/placements")).toEqual([{ method: "PUT", body: JSON.stringify({ botId: "chief", goalId: "sup" }) }]));
-    dragTo(tile("web").querySelector('[data-space-card="pepper"] [data-bot-id]')!, host.querySelector("[data-space-palette]"));
-    await vi.waitFor(() => expect(calls("/api/space/placements").at(-1)).toEqual({ method: "PUT", body: JSON.stringify({ botId: "pepper", goalId: null }) }));
-  });
-
-  it("places multiple threads of the same agent in one Space (or across Spaces) without removing it from the bench, and opens that thread's conversation on the side when clicked", async () => {
-    await render();
-    const benchChief = () => tile("bench").querySelector('[data-space-card="chief"] [data-bot-id]')!;
-    dragTo(benchChief(), tile("sup").querySelector("header")!);
-    dragTo(benchChief(), tile("sup").querySelector("header")!);
-    dragTo(benchChief(), tile("logo").querySelector("header")!);
-    expect(benchChief()).not.toBeNull();
-    await vi.waitFor(() => expect([...tile("sup").querySelectorAll<HTMLElement>('[data-space-card="chief"]')].map((card) => card.dataset.spaceThread)).toEqual(["t-new", "t-new-2"]));
-    await vi.waitFor(() => expect([...tile("logo").querySelectorAll<HTMLElement>('[data-space-card="chief"]')].map((card) => card.dataset.spaceThread)).toEqual(["t-new-3"]));
-    const cards = [...tile("sup").querySelectorAll<HTMLElement>('[data-space-card="chief"]')];
-    expect(cards[0]!.textContent).toContain("Supplier signed");
-    expect(cards[1]!.textContent).toContain("Supplier signed #2");
-    flushSync(() => cards[1]!.querySelector<HTMLButtonElement>("[data-bot-id]")!.click());
-    const chatDrawer = host.querySelector<HTMLElement>("[data-space-chat]")!;
-    expect(chatDrawer?.dataset.spaceChat).toBe("chief");
-    expect(chatDrawer?.dataset.spaceChatThread).toBe("t-new-2");
-    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleSettings", botId: "chief", open: false });
-    await vi.waitFor(() => expect(calls("/api/bots/chief/tasks/t-new-2?messages=80")).toHaveLength(1));
-    // Dragging a bot with an existing unthreaded placement ("warm" in "logo") into another Space ("sup") keeps it in "logo" too.
-    dragTo(tile("bench").querySelector('[data-space-card="warm"] [data-bot-id]')!, tile("sup").querySelector("header")!);
-    await vi.waitFor(() => expect(tile("sup").querySelector('[data-space-card="warm"]')).not.toBeNull());
-    expect(tile("logo").querySelector('[data-space-card="warm"]')).not.toBeNull();
-  });
-
-  it("drags a card from one tile to another, which glides it there, and a press without moving stays a click", async () => {
-    await render();
-    const ghost = () => document.querySelector("[data-space-ghost]");
-    flushSync(() => pointer(tile("web").querySelector('[data-space-card="pepper"] [data-bot-id]')!, "pointerdown", 10, 10));
-    under = tile("logo");
-    flushSync(() => pointer(window, "pointermove", 40, 40));
-    expect(ghost()?.textContent).toContain("Move to Fix logo");
-    expect(tile("logo").dataset.dropping).toBe("true");
-    flushSync(() => pointer(window, "pointerup", 40, 40));
-    expect(ghost()).toBeNull();
-    await vi.waitFor(() => expect(tile("logo").querySelector('[data-space-card="pepper"]')).not.toBeNull());
-    expect(calls("/api/space/placements")).toEqual([{ method: "PUT", body: JSON.stringify({ botId: "pepper", goalId: "logo" }) }]);
-    expect(animations).toEqual(["pepper"]);
-    flushSync(() => pointer(tile("logo").querySelector('[data-space-card="warm"]')!, "pointerdown", 10, 10));
-    flushSync(() => pointer(window, "pointerup", 11, 11));
-    expect(calls("/api/space/placements")).toHaveLength(1);
-  });
-
-  it("moves a tile by its header and saves its place", async () => {
-    await render();
-    const handle = tile("web").querySelector("[data-tile-handle]")!;
-    flushSync(() => pointer(handle, "pointerdown", 10, 10));
-    flushSync(() => pointer(canvas(), "pointermove", 40, 50));
-    flushSync(() => pointer(canvas(), "pointerup", 40, 50));
-    await vi.waitFor(() => expect(calls("/api/space/goals/web")).toHaveLength(1));
-    expect(JSON.parse(calls("/api/space/goals/web")[0].body).layout).toMatchObject({ x: expect.any(Number), y: expect.any(Number), w: 276 });
-  });
-
-  it("opens a Space's details from its header, where outcomes, asks and threads work", async () => {
-    await render();
-    const handle = tile("web").querySelector("[data-tile-handle]")!;
-    flushSync(() => { pointer(handle, "pointerdown", 5, 5); pointer(handle, "pointerup", 5, 5); });
-    expect([...drawer().querySelectorAll("[data-space-part]")].map((el) => el.getAttribute("data-space-part")))
-      .toEqual(["goal", "outcomes", "roadmap", "agents", "tasks", "asks", "threads", "notes"]);
-    expect(drawer().querySelector("span[data-level]")?.textContent).toBe("P1");
-    flushSync(() => part("outcomes").querySelector<HTMLInputElement>("input")!.click());
-    await vi.waitFor(() => expect(JSON.parse(calls("/api/space/goals/web")[0].body)).toEqual({ outcomes: [{ text: "Lighthouse ≥ 90", done: true }, { text: "No 404", done: true }] }));
-    flushSync(() => button(part("asks"), "Yes").click());
-    await vi.waitFor(() => expect(calls("/api/space/goals/web/asks/a1")).toEqual([{ method: "POST", body: JSON.stringify({ answer: "yes" }) }]));
-    flushSync(() => button(part("threads"), "Open").click());
-    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "switchTask", botId: "pepper", threadId: "th-1" });
-    flushSync(() => button(part("threads"), "Close").click());
-    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "updateTask", botId: "pepper", threadId: "th-1", patch: { archivedAt: expect.any(Number) } });
-  });
-
-  it("adds an agent from the tile: an existing bot, or a new one placed in the Space", async () => {
-    await render();
-    flushSync(() => button(tile("sup"), "Add an agent to Supplier signed").click());
-    const menu = () => document.querySelector<HTMLElement>("[data-quest-menu]")!;
-    flushSync(() => [...menu().querySelectorAll("button")].find((item) => item.textContent === "Chief")!.click());
-    await vi.waitFor(() => expect(calls("/api/space/placements")).toEqual([{ method: "PUT", body: JSON.stringify({ botId: "chief", goalId: "sup" }) }]));
-    flushSync(() => button(tile("sup"), "Add an agent to Supplier signed").click());
-    const input = menu().querySelector<HTMLInputElement>("input")!;
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    flushSync(() => { setter.call(input, "Scout"); input.dispatchEvent(new Event("input", { bubbles: true })); });
-    flushSync(() => menu().querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
-    await vi.waitFor(() => expect(calls("/api/space/placements").at(-1)).toEqual({ method: "PUT", body: JSON.stringify({ botId: "scout", goalId: "sup" }) }));
-  });
-
-  it("makes a Space where the map was double-clicked, with the level picked in the editor", async () => {
-    await render();
-    flushSync(() => canvas().dispatchEvent(new MouseEvent("dblclick", { bubbles: true, clientX: 300, clientY: 200 })));
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
-    const name = dialog.querySelector<HTMLInputElement>("input")!;
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    flushSync(() => { setter.call(name, "Launch ads"); name.dispatchEvent(new Event("input", { bubbles: true })); });
-    expect([...dialog.querySelectorAll('[aria-label="Level"] button')].map((item) => item.textContent)).toEqual(["P1", "P2", "P3", "General", "Side quest"]);
-    flushSync(() => button(dialog, "P2").click());
-    flushSync(() => dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
-    await vi.waitFor(() => expect(calls("/api/space/goals")).toHaveLength(1));
-    expect(JSON.parse(calls("/api/space/goals")[0].body)).toMatchObject({ title: "Launch ads", level: "P2", layout: { x: expect.any(Number) } });
-  });
-
-  it("asks the Chief to scan in a new thread, imports from Kanban, and opens a linked thread from a tile's menu", async () => {
-    await render();
-    flushSync(() => button(host, "Ask Chief to scan").click());
-    await vi.waitFor(() => expect(fixture.dispatch).toHaveBeenCalledWith({ type: "switchTask", botId: "chief", threadId: "t-new" }));
-    expect(JSON.parse(calls("/api/bots/chief/messages")[0].body)).toMatchObject({ threadId: "t-new", text: "Scan the Spaces board" });
-    flushSync(() => button(host, "Import from Kanban").click());
-    await vi.waitFor(() => expect(host.textContent).toContain("Kanban import: 2 new Spaces, 1 updated"));
-    flushSync(() => tile("web").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
-    const items = () => [...document.querySelectorAll<HTMLButtonElement>("[data-quest-menu] button")];
-    expect(items().map((item) => item.textContent)).toEqual(["Pepper", "Another bot…", "Edit Space"]);
-  });
-
-  it("shows the active plugin badge, creates canvas notes from the toolbar or shelf, and sets a Space goal emoji avatar", async () => {
-    await render();
+    expect(host.querySelector('[data-space-tile="web"]')?.textContent).toContain("Website up");
+    expect(host.querySelector('[data-space-tile="sup"]')?.textContent).toContain("Supplier signed");
+    expect(host.querySelector('[data-space-tile="logo"]')?.textContent).toContain("Fix logo");
+    expect(host.querySelector('[data-space-tile="bench"]')).not.toBeNull();
     expect(host.querySelector("[data-space-plugin-badge]")?.textContent).toContain("Plugin active");
+
+    // Create sticky note from top bar
     flushSync(() => host.querySelector<HTMLButtonElement>("[data-add-canvas-note]")!.click());
     await vi.waitFor(() => expect(calls("/api/space/canvas-notes")).toHaveLength(1));
-    await vi.waitFor(() => expect(host.querySelector('[data-canvas-note="cn-1"]')).not.toBeNull());
+    await vi.waitFor(() => expect(host.querySelector('[data-space-sticky="cn-1"]')).not.toBeNull());
 
-    flushSync(() => host.querySelector<HTMLButtonElement>('[data-goal-avatar="web"]')!.click());
-    const menu = document.querySelector<HTMLElement>('[data-goal-avatar-menu="web"]')!;
-    flushSync(() => menu.querySelector<HTMLButtonElement>('[data-goal-emoji="🚀"]')!.click());
-    await vi.waitFor(() => expect(calls("/api/space/goals/web")).toEqual([{ method: "PATCH", body: JSON.stringify({ icon: "🚀" }) }]));
+    // Ask Chief to scan & Import from Kanban
+    flushSync(() => buttonByText(host, "Ask Chief to scan").click());
+    await vi.waitFor(() =>
+      expect(fixture.dispatch).toHaveBeenCalledWith({ type: "switchTask", botId: "chief", threadId: "t-new" }),
+    );
+    flushSync(() => buttonByText(host, "Import from Kanban").click());
+    await vi.waitFor(() => expect(host.textContent).toContain("Kanban import: 2 new Spaces, 1 updated"));
+
+    // Open Space details drawer by clicking the goal summary row on "web"
+    const webTile = host.querySelector<HTMLElement>('[data-space-tile="web"]')!;
+    const goalSummaryBtn = [...webTile.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+      b.textContent?.includes("Site converts like the old one"),
+    )!;
+    flushSync(() => goalSummaryBtn.click());
+
+    const drawer = host.querySelector<HTMLElement>('[data-space-goal-drawer="web"]')!;
+    expect(drawer).not.toBeNull();
+    const outcomesPart = drawer.querySelector<HTMLElement>('[data-space-part="outcomes"]')!;
+    flushSync(() => outcomesPart.querySelector<HTMLInputElement>("input")!.click());
+    await vi.waitFor(() => expect(calls("/api/space/goals/web")).toHaveLength(1));
+
+    const asksPart = drawer.querySelector<HTMLElement>('[data-space-part="asks"]')!;
+    flushSync(() => buttonByText(asksPart, "Yes").click());
+    await vi.waitFor(() =>
+      expect(calls("/api/space/goals/web/asks/a1")).toEqual([
+        { method: "POST", body: JSON.stringify({ answer: "yes" }) },
+      ]),
+    );
+  });
+
+  it("spawns a strict A01 employee from the A01RosterDrawer AND via '+ Hire A01 Agent' modal (POST /api/bots -> PUT binding -> canvas node)", async () => {
+    await renderBoard();
+
+    // Flow A: Spawn from whiteboard A01RosterDrawer + A01SpawnPopover
+    flushSync(() => host.querySelector<HTMLButtonElement>('[data-testid="toggle-a01-roster"]')!.click());
+    flushSync(() => host.querySelector<HTMLButtonElement>('[data-testid="spawn-role-btn-media-buyer"]')!.click());
+
+    const popover = host.querySelector<HTMLElement>('[data-testid="a01-spawn-popover"]')!;
+    flushSync(() => popover.querySelector<HTMLButtonElement>('[data-testid="spawn-mode-long-term-employee"]')!.click());
+    flushSync(() => popover.querySelector<HTMLButtonElement>('[data-testid="spawn-computer-mac2-lume-isolated"]')!.click());
+    flushSync(() => popover.querySelector<HTMLButtonElement>('[data-testid="confirm-a01-spawn"]')!.click());
+
+    await vi.waitFor(() => expect(calls("/api/bots")).toHaveLength(1));
+    await vi.waitFor(() => expect(calls("/api/space/a01/bindings/hired-bot")).toHaveLength(1));
+    expect(JSON.parse(calls("/api/space/a01/bindings/hired-bot")[0]!.body!)).toMatchObject({
+      role: "MARKETING__media-buying",
+      mode: "long-term",
+      projectSlug: "surge",
+      computerProvider: "mac2-lume-vm",
+    });
+
+    // Flow B: Spawn from top-bar "+ Hire A01 Agent" modal
+    flushSync(() => host.querySelector<HTMLButtonElement>("[data-hire-a01-btn]")!.click());
+    const modal = document.querySelector<HTMLElement>("[data-hire-a01-modal]")!;
+    expect(modal).not.toBeNull();
+    await vi.waitFor(() => expect(modal.querySelector('[data-hire-role-option="MARKETING__media-buying"]')).not.toBeNull());
+    flushSync(() => modal.querySelector<HTMLButtonElement>('[data-hire-role-option="MARKETING__media-buying"]')!.click());
+    flushSync(() => modal.querySelector<HTMLButtonElement>('[data-hire-mode="temporary"]')!.click());
+    flushSync(() => modal.querySelector<HTMLButtonElement>("[data-confirm-hire-a01]")!.click());
+
+    await vi.waitFor(() => expect(calls("/api/bots")).toHaveLength(2));
+    await vi.waitFor(() => expect(calls("/api/space/canvas-nodes").length).toBeGreaterThanOrEqual(1));
+  });
+
+  it("auto-detects C02 project when typing jobPath in GoalEditor and opens AgentComputersModal to save 2nd Mac Tailscale host", async () => {
+    await renderBoard();
+
+    // 1. Open New Space GoalEditor & test C02 dropdown + live jobPath auto-detect
+    flushSync(() => host.querySelector<HTMLButtonElement>("[data-new-space-btn]")!.click());
+    const editor = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(editor).not.toBeNull();
+
+    const titleInput = editor.querySelector<HTMLInputElement>("input")!;
+    const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    flushSync(() => {
+      inputSetter.call(titleInput, "Peptide Launch");
+      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    const jobPathInput = editor.querySelector<HTMLInputElement>("[data-goal-job-path]")!;
+    flushSync(() => {
+      inputSetter.call(jobPathInput, "/Users/g/External-Vault/C01__work_board/precision-peptide__vsl");
+      jobPathInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    await vi.waitFor(() =>
+      expect(editor.querySelector("[data-goal-c02-detected]")?.textContent).toContain("Precision Peptide"),
+    );
+    expect(editor.querySelector<HTMLSelectElement>("[data-goal-c02-select]")!.value).toBe("precision-peptide");
+
+    flushSync(() => editor.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
+    await vi.waitFor(() => expect(calls("/api/space/goals")).toHaveLength(1));
+    expect(JSON.parse(calls("/api/space/goals")[0]!.body!)).toMatchObject({
+      title: "Peptide Launch",
+      projectSlug: "precision-peptide",
+      jobPath: "/Users/g/External-Vault/C01__work_board/precision-peptide__vsl",
+    });
+
+    // 2. Open Agent Computers Modal, verify all 6 providers + active lease, and save 2nd Mac Tailscale host
+    flushSync(() => host.querySelector<HTMLButtonElement>("[data-open-computers-btn]")!.click());
+    const compModal = document.querySelector<HTMLElement>("[data-agent-computers-modal]")!;
+    expect(compModal).not.toBeNull();
+    await vi.waitFor(() => expect(compModal.querySelector('[data-computer-lease="lease-pepper-1"]')).not.toBeNull());
+
+    for (const providerId of ["mac2-lume-vm", "local-cua-ax", "mac2-shared", "cua-cloud", "daytona", "orgo"]) {
+      expect(compModal.querySelector(`[data-computer-provider="${providerId}"]`)).not.toBeNull();
+    }
+
+    const hostInput = compModal.querySelector<HTMLInputElement>("[data-mac2-host-input]")!;
+    flushSync(() => {
+      inputSetter.call(hostInput, "100.88.12.4");
+      hostInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    flushSync(() => compModal.querySelector<HTMLButtonElement>("[data-save-mac2-config]")!.click());
+
+    await vi.waitFor(() => expect(calls("/api/space/computers/config")).toHaveLength(1));
+    expect(JSON.parse(calls("/api/space/computers/config")[0]!.body!)).toMatchObject({
+      mac2: expect.objectContaining({ tailscaleHost: "100.88.12.4" }),
+    });
+  });
+
+  it("places a live bot session card on the whiteboard, pins it to /api/space/pinned-sessions, and opens its thread drawer", async () => {
+    await renderBoard();
+
+    flushSync(() => host.querySelector<HTMLButtonElement>('[data-testid="toggle-session-drawer"]')!.click());
+    const sessionDrawer = host.querySelector<HTMLElement>('[data-testid="session-project-drawer"]')!;
+    flushSync(() => sessionDrawer.querySelector<HTMLButtonElement>('[data-testid="place-session-pepper::th-1"]')!.click());
+
+    const sessionNode = host.querySelector<HTMLElement>('[data-space-node-kind="session"]')!;
+    expect(sessionNode).not.toBeNull();
+    const nodeId = sessionNode.getAttribute("data-space-node")!;
+
+    // Pin floating square
+    flushSync(() => sessionNode.querySelector<HTMLButtonElement>(`[data-testid="pin-session-${nodeId}"]`)!.click());
+    await vi.waitFor(() => expect(calls("/api/space/pinned-sessions")).toHaveLength(1));
+    expect(JSON.parse(calls("/api/space/pinned-sessions")[0]!.body!)).toEqual({
+      pinnedSessions: ["pepper::th-1"],
+    });
+    expect(document.querySelector("[data-pinned-sessions-layer]")).not.toBeNull();
+
+    // Switch computer target in 1 click on the session card -> rebinds bot computer lease
+    flushSync(() => sessionNode.querySelector<HTMLButtonElement>(`[data-testid="switch-computer-${nodeId}"]`)!.click());
+    await vi.waitFor(() => expect(calls("/api/space/a01/bindings/pepper").length).toBeGreaterThanOrEqual(1));
+
+    // Place a C02 Project Card from the Sessions & Projects drawer & enrich 7-pillar details
+    if (!host.querySelector('[data-testid="session-project-drawer"]')) {
+      flushSync(() => host.querySelector<HTMLButtonElement>('[data-testid="toggle-session-drawer"]')!.click());
+    }
+    const projectDrawer = host.querySelector<HTMLElement>('[data-testid="session-project-drawer"]')!;
+    flushSync(() => projectDrawer.querySelector<HTMLButtonElement>('[data-testid="drawer-tab-projects"]')!.click());
+    flushSync(() =>
+      projectDrawer.querySelector<HTMLButtonElement>('[data-testid="place-project-precision-peptide"]')!.click(),
+    );
+    await vi.waitFor(() => expect(host.querySelector('[data-space-node-kind="project"]')).not.toBeNull());
+    await vi.waitFor(() => expect(calls("/api/space/c02/projects/precision-peptide").length).toBeGreaterThanOrEqual(1));
+
+    // Open thread conversation drawer
+    flushSync(() => sessionNode.querySelector<HTMLButtonElement>(`[data-testid="open-session-${nodeId}"]`)!.click());
+    const chatDrawer = host.querySelector<HTMLElement>("[data-space-chat]")!;
+    expect(chatDrawer.dataset.spaceChat).toBe("pepper");
+    expect(chatDrawer.dataset.spaceChatThread).toBe("th-1");
   });
 });

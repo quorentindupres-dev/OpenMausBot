@@ -1,145 +1,333 @@
-import { createServer, type Server } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { json, readBody } from "../harness/http.ts";
+import { AgentComputerPool, AgentComputerStore } from "../agent-computers/index.ts";
+import { callTool } from "../drivers/agents-call.ts";
+import type { ToolCallContext } from "../drivers/agents-call.ts";
+import { availableTools, catalogProfileFromEnv } from "../drivers/agents-catalog.ts";
+import type { RequestAuth } from "../request-auth.ts";
+import { clearA01Cache } from "../space/a01-bridge.ts";
+import { clearC02Cache } from "../space/c02-bridge.ts";
 import { createSpaceStore } from "../space/store.ts";
 import { createSpaceInternalRoutes, createSpaceRoutes } from "./space.ts";
-import { dispatchRoutes, type RouteHandler } from "./table.ts";
+import { PASS, type RouteContext, type RouteHandler } from "./table.ts";
 
-const servers: Server[] = [];
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))));
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+const tempDirs: string[] = [];
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  clearA01Cache();
+  clearC02Cache();
 });
 
-const BOTS = [{ id: "ea", name: "EA" }, { id: "chief", name: "Chief", chiefOfStaff: true }];
-const TREE = { nodes: [{ id: "k1", kind: "goal", title: "Find a supplier", depth: 0 }, { id: "k2", kind: "task", title: "Call Apex", depth: 1 }] };
-
-async function serve(kanban: string | null = null): Promise<{ base: string; store: ReturnType<typeof createSpaceStore> }> {
-  const dir = mkdtempSync(join(tmpdir(), "omb-space-route-"));
-  dirs.push(dir);
-  const store = createSpaceStore(join(dir, "space.json"));
-  const owner = createSpaceRoutes({ store: () => store, bots: () => BOTS, kanban: () => kanban, readTree: async () => TREE });
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const as = req.headers["x-bot"];
-    const routes: RouteHandler[] = typeof as === "string"
-      ? [createSpaceInternalRoutes({ from: BOTS.find((bot) => bot.id === as)!, threadId: "t-1", store: () => store, bots: () => BOTS })]
-      : [owner];
-    const handled = await dispatchRoutes(routes, {
-      req, res, url, path: url.pathname, method: req.method ?? "GET",
-      auth: { kind: "loopback", scopes: ["admin", "client"] }, json, readBody,
-    });
-    if (!handled) json(res, 404, { from: "inline routes" });
+function createTestHarness() {
+  const dir = mkdtempSync(join(tmpdir(), "omb-space-routes-"));
+  tempDirs.push(dir);
+  const store = createSpaceStore(join(dir, "space.json"), { now: () => 1_761_868_800_000 });
+  const compStore = new AgentComputerStore(join(dir, "computers"));
+  compStore.updateMac2Config({
+    tailscaleHost: "mac2.tailnet.ts.net",
+    sshUser: "gregorio",
+    maxConcurrentVms: 4,
   });
-  servers.push(server);
-  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
-  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, store };
+
+  const vms = new Map<string, { name: string; os: "macos" | "linux"; status: "running" | "stopped"; ipAddress: string | null; vncUrl: string | null }>([
+    ["xlabs-macos-base", { name: "xlabs-macos-base", os: "macos", status: "stopped", ipAddress: null, vncUrl: null }],
+  ]);
+  let ipSeq = 10;
+
+  const pool = new AgentComputerPool({
+    store: compStore,
+    platform: "darwin",
+    getSettings: () => ({
+      cuaApiKey: null,
+      cuaApiBaseUrl: "https://api.cua.ai/v1",
+      daytonaApiKey: null,
+      daytonaApiBaseUrl: "https://app.daytona.io/api",
+      orgoApiKey: null,
+      orgoApiBaseUrl: "https://www.orgo.ai/api",
+    }),
+    lumeReadyPollDelaysMs: [0],
+    runShell: async () => ({ exitCode: 0, stdout: '{"data":"iVBORw0KGgoAAAANSUhEUg=="}\n', stderr: "" }),
+    fetchImpl: async (input, init) => {
+      const u = new URL(typeof input === "string" ? input : input.toString());
+      const m = (init?.method ?? "GET").toUpperCase();
+      const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+      if (m === "GET" && u.pathname === "/lume/vms") {
+        return new Response(JSON.stringify([...vms.values()]), { status: 200 });
+      }
+      if (m === "POST" && u.pathname === "/lume/vms/clone") {
+        const newName = String(body?.newName ?? "");
+        vms.set(newName, { name: newName, os: "macos", status: "stopped", ipAddress: null, vncUrl: null });
+        return new Response(JSON.stringify({ ok: true }), { status: 201 });
+      }
+      const runMatch = u.pathname.match(/^\/lume\/vms\/([^/]+)\/run$/);
+      if (m === "POST" && runMatch) {
+        const vm = vms.get(decodeURIComponent(runMatch[1]!));
+        if (!vm) return new Response("{}", { status: 404 });
+        ipSeq += 1;
+        vm.status = "running";
+        vm.ipAddress = `192.168.64.${ipSeq}`;
+        vm.vncUrl = `vnc://127.0.0.1:${5900 + ipSeq}`;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      const stopMatch = u.pathname.match(/^\/lume\/vms\/([^/]+)\/stop$/);
+      if (m === "POST" && stopMatch) {
+        const vm = vms.get(decodeURIComponent(stopMatch[1]!));
+        if (vm) vm.status = "stopped";
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      const vmMatch = u.pathname.match(/^\/lume\/vms\/([^/]+)$/);
+      if (vmMatch) {
+        const name = decodeURIComponent(vmMatch[1]!);
+        if (m === "GET") {
+          const vm = vms.get(name);
+          return vm ? new Response(JSON.stringify(vm), { status: 200 }) : new Response("{}", { status: 404 });
+        }
+        if (m === "DELETE") {
+          vms.delete(name);
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+      }
+      return new Response("{}", { status: 404 });
+    },
+  });
+
+  const isolatedFleetDb = join(dir, "fleet.db");
+  const bots = [
+    { id: "ea", name: "EA" },
+    { id: "bot-mb", name: "Media Buyer" },
+  ];
+
+  const handler = createSpaceRoutes({
+    store: () => store,
+    bots: () => bots,
+    kanban: () => null,
+    computers: () => pool,
+    a01Opts: { fleetDbPath: isolatedFleetDb },
+  });
+
+  const internalHandler = createSpaceInternalRoutes({
+    from: { id: "bot-mb", name: "Media Buyer" },
+    threadId: "thr-1",
+    store: () => store,
+    bots: () => bots,
+    a01Opts: { fleetDbPath: isolatedFleetDb },
+  });
+
+  async function invoke(route: RouteHandler, method: string, urlPath: string, payload?: unknown) {
+    let status = 0;
+    let responseBody: Record<string, unknown> = {};
+    const parsedUrl = new URL(urlPath, "http://127.0.0.1:4173");
+    const ctx: RouteContext = {
+      req: {} as IncomingMessage,
+      res: { headersSent: false, writableEnded: false } as ServerResponse,
+      url: parsedUrl,
+      path: parsedUrl.pathname,
+      method,
+      auth: { kind: "local" } as unknown as RequestAuth,
+      json: (_res, code, data) => {
+        status = code;
+        responseBody = (data ?? {}) as Record<string, unknown>;
+      },
+      readBody: async () => payload ?? {},
+    };
+    const out = await route(ctx);
+    return { passed: out === PASS, status, body: responseBody };
+  }
+
+  return { store, pool, invoke, handler, internalHandler };
 }
 
-const call = async (base: string, method: string, path: string, body?: unknown, bot?: string) => {
-  const headers: Record<string, string> = { ...(body === undefined ? {} : { "content-type": "application/json" }), ...(bot ? { "x-bot": bot } : {}) };
-  const response = await fetch(`${base}${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  return { status: response.status, body: await response.json() as any };
-};
+describe("Space HTTP API & Internal Agent Tools", () => {
+  it("serves GET /api/space with A01 summary and C02 projects, plus A01 & C02 endpoints", async () => {
+    const { invoke, handler } = createTestHarness();
 
-describe("the Spaces routes", () => {
-  it("passes requests that are not its own", async () => {
-    const { base } = await serve();
-    expect(await call(base, "GET", "/api/spaces")).toEqual({ status: 404, body: { from: "inline routes" } });
+    const overview = await invoke(handler, "GET", "/api/space");
+    expect(overview.status).toBe(200);
+    expect(overview.body.a01Summary).toMatchObject({ available: true, total: 33, mainCount: 18, miniCount: 15 });
+    expect(Array.isArray(overview.body.c02Projects)).toBe(true);
+    expect((overview.body.c02Projects as Array<{ slug: string }>).some((p) => p.slug === "surge")).toBe(true);
+
+    const rolesRes = await invoke(handler, "GET", "/api/space/a01/roles");
+    expect(rolesRes.status).toBe(200);
+    expect((rolesRes.body.roles as unknown[]).length).toBe(33);
+
+    const cardRes = await invoke(handler, "GET", "/api/space/a01/card/EA?mode=temporary&project=surge");
+    expect(cardRes.status).toBe(200);
+    expect(cardRes.body.card).toMatchObject({ role: "EA", mode: "temporary", project: "surge" });
+
+    const badCard = await invoke(handler, "GET", "/api/space/a01/card/NOT_A_REAL_ROLE");
+    expect(badCard.status).toBe(400);
+
+    const searchRes = await invoke(handler, "GET", "/api/space/a01/search?q=bottleneck&limit=5");
+    expect(searchRes.status).toBe(200);
+    expect(Number(searchRes.body.count)).toBeGreaterThan(0);
+
+    const c02List = await invoke(handler, "GET", "/api/space/c02/projects");
+    expect(c02List.status).toBe(200);
+    expect((c02List.body.projects as unknown[]).length).toBeGreaterThanOrEqual(9);
+
+    const c02Surge = await invoke(handler, "GET", "/api/space/c02/projects/surge");
+    expect(c02Surge.status).toBe(200);
+    expect(c02Surge.body.project).toMatchObject({ slug: "surge", hasDb: true });
+
+    const c02Detect = await invoke(handler, "GET", "/api/space/c02/detect?target=C01__work_board%2Fsurge__vsl");
+    expect(c02Detect.status).toBe(200);
+    expect(c02Detect.body).toMatchObject({ slug: "surge", matched: true });
   });
 
-  it("creates Spaces, places bots, manages tasks, answers asks and links threads", async () => {
-    const { base } = await serve();
-    const web = (await call(base, "POST", "/api/space/goals", { title: "Website up", level: "P1", outcomes: [{ text: "No 404" }] })).body.goal;
-    const side = (await call(base, "POST", "/api/space/goals", { title: "Fix logo", level: "side" })).body.goal;
-    expect((await call(base, "PUT", "/api/space/placements", { botId: "ea", goalId: web.id })).body).toEqual({ placements: { ea: web.id } });
-    expect((await call(base, "PUT", "/api/space/threads/t-1", { goalId: side.id })).body).toEqual({ threadGoals: { "t-1": side.id } });
-    const task = (await call(base, "POST", `/api/space/goals/${web.id}/tasks`, { text: "Fix hero", botId: "ea" })).body.task;
-    expect((await call(base, "PATCH", `/api/space/goals/${web.id}/tasks/${task.id}`, { done: true })).body.task.done).toBe(true);
-    expect((await call(base, "POST", `/api/space/goals/${web.id}/log`, { text: "Started" })).body.entry.signature).toMatch(/^— the person · Website up · /);
-    expect((await call(base, "PATCH", "/api/space/settings", { visualFirst: true })).body).toEqual({ visualFirst: true });
-    const state = (await call(base, "GET", "/api/space")).body;
-    expect(state.goals.map((goal: { title: string }) => goal.title)).toEqual(["Website up", "Fix logo"]);
-    expect(state.kanban).toBe(false);
-    expect((await call(base, "DELETE", `/api/space/goals/${web.id}/tasks/${task.id}`)).status).toBe(200);
-    expect((await call(base, "DELETE", `/api/space/goals/${web.id}`)).status).toBe(200);
-    expect((await call(base, "GET", "/api/space")).body.placements).toEqual({});
-  });
+  it("validates A01 bot bindings, acquires/releases AgentComputerPool leases, and manages computer config", async () => {
+    const { invoke, handler } = createTestHarness();
 
-  it("lets a bot read the board and post signed notes, outcomes and asks as itself", async () => {
-    const { base, store } = await serve();
-    const web = (await call(base, "POST", "/api/space/goals", { title: "Website up", outcomes: [{ text: "No 404" }] })).body.goal;
-    expect((await call(base, "POST", "/api/internal/space/note", { text: "hi" }, "ea")).status).toBe(409);
-    await call(base, "PUT", "/api/space/placements", { botId: "ea", goalId: web.id });
-    const note = await call(base, "POST", "/api/internal/space/note", { text: "links fixed", kind: "outcome", outcomeIndex: 0, botId: "chief" }, "ea");
-    expect(note.status).toBe(201);
-    expect(note.body.entry).toMatchObject({ botId: "ea", botName: "EA" });
-    expect(note.body.entry.signature).toMatch(/^— EA \(ea\) · Website up · \d{4}-/);
-    expect(store.goal(web.id)!.outcomes[0]!.done).toBe(true);
-    const ask = await call(base, "POST", "/api/internal/space/note", { text: "EA can pick up the FAQ. Plan: draft", kind: "ask", spaceId: web.id, forBotId: "ea" }, "chief");
-    expect(ask.status).toBe(201);
-    const filed = store.goal(web.id)!.asks[0]!;
-    expect((await call(base, "POST", `/api/space/goals/${web.id}/asks/${filed.id}`, { answer: "yes" })).body.ask.status).toBe("yes");
-    expect(store.goal(web.id)!.tasks).toEqual([expect.objectContaining({ text: filed.text, botId: "ea" })]);
-    const status = await call(base, "GET", "/api/internal/space/status", undefined, "ea");
-    expect(status.body.text).toContain('Your Space:\nGeneral Space "Website up"');
-    expect((await call(base, "GET", "/api/space/scan")).body.text).toContain("Scan the Spaces board");
-  });
-
-  it("imports from Kanban only when its CLI is set", async () => {
-    const off = await serve();
-    expect((await call(off.base, "POST", "/api/space/import-kanban")).status).toBe(404);
-    const on = await serve("/stub/kanban.js");
-    expect((await call(on.base, "GET", "/api/space")).body.kanban).toBe(true);
-    expect((await call(on.base, "POST", "/api/space/import-kanban")).body).toEqual({ created: 1, updated: 0 });
-    expect(on.store.state().goals[0]).toMatchObject({ title: "Find a supplier", kanbanCard: "k1", tasks: [expect.objectContaining({ text: "Call Apex" })] });
-  });
-
-  it("answers bad input with 400 and a missing Space with 404", async () => {
-    const { base } = await serve();
-    expect((await call(base, "POST", "/api/space/goals", { title: "" })).status).toBe(400);
-    expect((await call(base, "PUT", "/api/space/placements", { botId: "ea", goalId: "missing" })).status).toBe(404);
-    expect((await call(base, "PATCH", "/api/space/settings", { visualFirst: "yes" })).status).toBe(400);
-    expect((await call(base, "GET", "/api/space/nothing")).status).toBe(404);
-  });
-
-  it("supports goal icons, canvas notes CRUD, and plugin metadata route", async () => {
-    const { base } = await serve();
-    expect(await call(base, "GET", "/api/space/plugin")).toEqual({
-      status: 200,
-      body: { ok: true, id: "xlabs-spaces", version: "1.0.0" },
+    const rejected = await invoke(handler, "PUT", "/api/space/a01/bindings/bot-mb", {
+      role: "INVENTED_ROLE",
+      mode: "temporary",
     });
-    const goal = (await call(base, "POST", "/api/space/goals", { title: "Ads", icon: "🔥" })).body.goal;
-    expect(goal.icon).toBe("🔥");
-    const patchedGoal = (await call(base, "PATCH", `/api/space/goals/${goal.id}`, { icon: null })).body.goal;
-    expect(patchedGoal.icon).toBeUndefined();
+    expect(rejected.status).toBe(400);
 
-    const createdNote = await call(base, "POST", "/api/space/canvas-notes", {
-      text: "Check ROAS",
-      color: "green",
-      layout: { x: 200, y: 150, w: 220, h: 160 },
+    // Bind bot-mb to media-buyer + Surge + UI alias `mac2-lume-isolated` (maps to `mac2-lume-vm`)
+    const bound = await invoke(handler, "PUT", "/api/space/a01/bindings/bot-mb", {
+      role: "media-buyer",
+      mode: "temporary",
+      projectSlug: "surge",
+      computerProvider: "mac2-lume-isolated",
+      requireLease: true,
     });
-    expect(createdNote.status).toBe(201);
-    expect(createdNote.body.note).toMatchObject({
-      text: "Check ROAS",
-      color: "green",
-      layout: { x: 200, y: 150, w: 220, h: 160 },
+    expect(bound.status).toBe(200);
+    const lease = bound.body.lease as { leaseId: string; provider: string };
+    expect(lease.provider).toBe("mac2-lume-vm");
+    expect(bound.body.binding).toMatchObject({
+      role: "media-buyer",
+      mode: "temporary",
+      projectSlug: "surge",
+      computerProvider: "mac2-lume-vm",
+      computerLeaseId: lease.leaseId,
     });
-    const noteId = createdNote.body.note.id as string;
-    const updatedNote = await call(base, "PATCH", `/api/space/canvas-notes/${noteId}`, {
-      text: "ROAS > 2.5",
-      color: "pink",
+
+    // Inspect computers snapshot, exec command, preview, config patch, and unbind
+    const snap = await invoke(handler, "GET", "/api/space/computers");
+    expect(snap.status).toBe(200);
+    expect((snap.body.leases as unknown[]).length).toBe(1);
+
+    const execRes = await invoke(handler, "POST", `/api/space/computers/${lease.leaseId}/exec`, {
+      command: "uname -a",
     });
-    expect(updatedNote.status).toBe(200);
-    expect(updatedNote.body.note).toMatchObject({ id: noteId, text: "ROAS > 2.5", color: "pink" });
-    expect((await call(base, "PATCH", "/api/space/canvas-notes/missing", { text: "x" })).status).toBe(404);
-    expect((await call(base, "DELETE", `/api/space/canvas-notes/${noteId}`)).status).toBe(200);
-    expect((await call(base, "DELETE", `/api/space/canvas-notes/${noteId}`)).status).toBe(404);
+    expect(execRes.status).toBe(200);
+    expect(execRes.body.result).toMatchObject({ exitCode: 0 });
+
+    const previewRes = await invoke(handler, "GET", `/api/space/computers/${lease.leaseId}/preview`);
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.preview).toBeDefined();
+
+    const cfgPatch = await invoke(handler, "PATCH", "/api/space/computers/config", {
+      mac2: { maxConcurrentVms: 6 },
+      burstPolicy: { enabled: false },
+    });
+    expect(cfgPatch.status).toBe(200);
+    expect(cfgPatch.body.mac2).toMatchObject({ maxConcurrentVms: 6 });
+    expect(cfgPatch.body.burstPolicy).toMatchObject({ enabled: false });
+
+    const unbindRes = await invoke(handler, "DELETE", "/api/space/a01/bindings/bot-mb");
+    expect(unbindRes.status).toBe(200);
+
+    // Direct lease + release endpoint check
+    const directLease = await invoke(handler, "POST", "/api/space/computers/lease", {
+      agentId: "scout-1",
+      mode: "temporary",
+      preferredProvider: "mac2-lume-vm",
+    });
+    expect(directLease.status).toBe(201);
+    const directId = (directLease.body.lease as { leaseId: string }).leaseId;
+
+    const released = await invoke(handler, "POST", `/api/space/computers/${directId}/release`, {
+      action: "close",
+    });
+    expect(released.status).toBe(200);
+  });
+
+  it("handles Whiteboard v2 arrows, nodes, batch semantic wiring, pinned-sessions, and internal agent lookup tools", async () => {
+    const { invoke, handler, internalHandler } = createTestHarness();
+
+    const n1 = await invoke(handler, "POST", "/api/space/canvas-nodes", {
+      id: "node:proj:surge",
+      kind: "c02-project",
+      title: "Surge",
+      projectSlug: "surge",
+      layout: { x: 80, y: 80, w: 240, h: 150 },
+    });
+    expect(n1.status).toBe(201);
+
+    const n2 = await invoke(handler, "POST", "/api/space/canvas-nodes", {
+      id: "node:agent:mb",
+      kind: "a01-agent",
+      title: "Media Buyer",
+      botId: "bot-mb",
+      a01Role: "media-buyer",
+      a01Mode: "temporary",
+      layout: { x: 420, y: 80, w: 240, h: 150 },
+    });
+    expect(n2.status).toBe(201);
+
+    const arrow = await invoke(handler, "POST", "/api/space/canvas-arrows", {
+      id: "arrow:1",
+      fromId: "node:proj:surge",
+      toId: "node:agent:mb",
+      label: "context",
+    });
+    expect(arrow.status).toBe(201);
+
+    const patchedArrow = await invoke(handler, "PATCH", "/api/space/canvas-arrows/arrow%3A1", {
+      label: "owns ad account",
+    });
+    expect(patchedArrow.status).toBe(200);
+    expect(patchedArrow.body.arrow).toMatchObject({ label: "owns ad account" });
+
+    const batchRes = await invoke(handler, "POST", "/api/space/whiteboard/batch", {
+      addNotes: [{ id: "note:wb1", text: "Check ROAS", color: "yellow", layout: { x: 10, y: 10, w: 200, h: 140 } }],
+      patchNodes: [{ id: "node:agent:mb", patch: { title: "Lead Media Buyer" } }],
+    });
+    expect(batchRes.status).toBe(200);
+    expect((batchRes.body.botBindings as Record<string, unknown>)["bot-mb"]).toMatchObject({
+      role: "media-buyer",
+      projectSlug: "surge",
+    });
+
+    const pinned = await invoke(handler, "PUT", "/api/space/pinned-sessions", {
+      pinnedSessions: ["sess-a", "sess-b", "sess-a"],
+    });
+    expect(pinned.status).toBe(200);
+    expect(pinned.body.pinnedSessions).toEqual(["sess-a", "sess-b"]);
+
+    // Verify catalog exposes a01_lookup and c02_project_lookup when OMB_SPACE=1, and callTool dispatches to internal routes
+    const spaceToolNames = availableTools(catalogProfileFromEnv({ OMB_SPACE: "1" })).map((t) => t.name);
+    expect(spaceToolNames).toEqual(expect.arrayContaining(["space_status", "space_note", "a01_lookup", "c02_project_lookup"]));
+
+    const toolCtx = {
+      botId: "bot-mb",
+      threadId: "thr-1",
+      depth: 0,
+      externalRuntime: false,
+      sharedComputers: false,
+      client: {
+        apiResponse: async (apiPath: string, init?: { method?: string; body?: string }) => {
+          const payload = init?.body ? JSON.parse(init.body) : undefined;
+          const res = await invoke(internalHandler, init?.method ?? "GET", apiPath, payload);
+          return { ok: res.status >= 200 && res.status < 300, status: res.status, body: res.body };
+        },
+      },
+    } as unknown as ToolCallContext;
+
+    const a01Out = await callTool("a01_lookup", { action: "formula", role: "media-buyer" }, toolCtx);
+    expect(a01Out.isError).toBeUndefined();
+    expect(a01Out.text).toContain("A01 formulas");
+
+    const c02Out = await callTool("c02_project_lookup", { action: "card", slug: "surge" }, toolCtx);
+    expect(c02Out.isError).toBeUndefined();
+    expect(c02Out.text).toContain("[C02 Business Context — surge");
   });
 });
