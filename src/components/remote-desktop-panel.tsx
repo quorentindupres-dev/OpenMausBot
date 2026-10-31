@@ -13,6 +13,7 @@ import { releaseComputerPanelFocus, useComputerPanelEntry } from "@/lib/computer
 import { RoutineEditor } from "./RoutinesPage";
 import { BrowserPanel, type BrowserSignIn } from "./BrowserPanel";
 import { SignInBanner } from "./SignInRequestCard";
+import { productName } from "@/lib/brand";
 
 function viewerAddress(raw: unknown): string {
   if (typeof raw !== "string" || !raw) throw new Error("The host did not return a live desktop link");
@@ -190,7 +191,7 @@ export function RemoteDesktopPanel({ bot }: { bot: Bot }) {
         `${bot.name}'s live desktop`,
         bot.id,
       );
-      if (!opened) throw new Error("OpenMausBot could not open the live desktop");
+      if (!opened) throw new Error(`${productName()} could not open the live desktop`);
     } catch (cause) {
       if (tookControl) {
         await api(`/api/bots/${bot.id}/computer/control`, {
@@ -341,8 +342,8 @@ export function RemoteDesktopPanel({ bot }: { bot: Bot }) {
                 >
                   <span className={cn("size-1.5 shrink-0 rounded-full", routine.enabled ? "bg-success" : "bg-ink-secondary/40")} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12.5px] font-medium text-ink">{routine.name}</span>
-                    <span className="block truncate text-[10.5px] text-ink-secondary">
+                    <span className="block truncate text-[13px] font-medium text-ink">{routine.name}</span>
+                    <span className="block truncate text-[11px] text-ink-secondary">
                       {routineScheduleLabel(routine)}{routine.runOn === "cloud" ? " · runs on VM" : ""}
                     </span>
                   </span>

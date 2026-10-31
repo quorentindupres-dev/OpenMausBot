@@ -3,6 +3,8 @@ import type { OneHomeCloud, OneHomeView, createOneHome } from "./one-home.mjs";
 import type { installTeamMove } from "./team-move-main.mjs";
 
 export function oneHomeCloud(state: unknown): OneHomeCloud | null;
+/** This computer's server's answer to the move's freeze: frozen, or what still holds the move. */
+export function freezeAnswer(got: { ok: boolean; status: number; body: any }): { frozen: true } | { busy: string; what?: string };
 export type KeepHereState = import("./cloud-send.mjs").KeepHereState;
 export function installationOf(environmentId: string): string;
 
@@ -14,12 +16,11 @@ export function installOneHome(deps: Omit<SendDeps, "local" | "move" | "moveSess
   /** The MausBot Cloud sign-in (cloud-account.mjs). */
   account(): { state(): any; pairHome(): Promise<{ origin: string; code: string; expiresAt?: number }>; exportHome(options?: { installation?: string }): Promise<any>;
     reportMove?(options: { installation: string }): Promise<boolean>; reportKept?(options: { installation: string }): Promise<boolean>;
+    reportMoveStatus?(report: import("./move-status.mjs").MoveStatusReport): Promise<boolean>;
     pairTeam(teamId: string): Promise<{ origin: string; code: string; expiresAt?: number }> } | null;
   journalFile(): string;
   tempRoot(): string;
   lend?(projects: string[]): Promise<unknown>;
-  /** Once this computer is lent: asks the person, at most once, to lend the rest of it too, without being waited for. */
-  offer?(): unknown;
   phone?: { paired(): boolean; stop(): Promise<void>; start(): Promise<void> };
   openHome?(): void;
   openLocal?(): void;
@@ -33,6 +34,8 @@ export function installOneHome(deps: Omit<SendDeps, "local" | "move" | "moveSess
   openTeam?(team: { id: string; name: string }): void;
   /** The team moves' journal, team-moves.json beside journalFile by default. */
   teamJournal?: { read(): unknown; write(value: unknown): void };
+  /** The waits of the move's report to the Admin (move-status.mjs), setTimeout's by default. */
+  reportTimers?: { set(work: () => void, ms: number): unknown; clear(timer: unknown): void };
 }): ReturnType<typeof installCloudSend> & {
   keep: { state(): KeepHereState; set(on: boolean): Promise<void> };
   kick(): Promise<void>;
@@ -41,6 +44,7 @@ export function installOneHome(deps: Omit<SendDeps, "local" | "move" | "moveSess
   close(): void;
   oneHome: ReturnType<typeof createOneHome>;
   journal(): unknown;
+  moveStatus: { read(): import("./move-status.mjs").MoveStatusReport; flush(): Promise<void> };
   marker(): Promise<{ frozen: boolean; cloud?: string; busy?: string }>;
   lastInput(): number;
   teamMove: ReturnType<typeof installTeamMove>;

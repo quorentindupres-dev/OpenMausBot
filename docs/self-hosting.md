@@ -720,13 +720,13 @@ alone.
   recorded in the admin activity log.
 - **Departments.** A department (sidebar section) is listed to a user only when it
   holds a bot or room they can see.
-- **Bots working together.** A bot reaches a teammate (`coordinate_bots`,
-  its roster and `list_bots`, @mentions, a Chief's team) only when exactly
-  the same people can see both: otherwise one bot's thread could carry the
-  other's answers to people who cannot see it. Bots nobody restricted all
+- **Bots working together.** A bot reaches any teammate, in any department
+  (`coordinate_bots`, its roster and `list_bots`, @mentions, a Chief's team),
+  but only when exactly the same people can see both: otherwise one bot's
+  thread could carry the other's answers to people who cannot see it. Bots nobody restricted all
   share "everyone", so nothing changes until an admin restricts one. A bot a
   Chief creates (directly, or in a reviewed team setup) gets exactly the
-  Chief's audience.
+  Chief's audience, and a copy of the Chief's connected apps.
 - **Who sees everything.** Admin sessions, the owner on this machine, and a
   session-less local service (the Slack worker under `service` trust) see
   every bot. A pairing-code device with no email sees only bots everyone
@@ -873,20 +873,64 @@ current month to date.
 
 ### When an engine runs out
 
-When a person's turn ends on its engine's quota or usage limit (a
-subscription's weekly limit, an API key out of credit), the conversation gets
-one card offering up to three other engines that can take over, and "Not
-now". An engine is offered only if it can run a turn now (installed, signed
-in, allowed by your organisation), has the tools and the working folder the
-current one has, and can run the conversation's approval level as it stands.
-Nothing changes until the person picks one: that conversation alone moves to
-the engine's default model, the bot's own model and its other conversations
-stay where they are, and their message is sent again. Turns nobody typed
-(routines, webhooks, a teammate's work) get no card.
+When a turn ends on a usage limit (a subscription's 5-hour or weekly limit,
+one model's own weekly window, a model's extra usage credits), the bot carries
+on by itself with another AI the person has set up until that limit resets,
+and the person hears it once for that stretch of the limit, as a notification:
+"Codex reached its limit until 14:00, so Kai is using Claude meanwhile." With
+no AI to carry on, it says the bot waits instead. Nobody is asked.
 
-The offer is on by default. To switch it off, start the server with
-`OMB_QUOTA_SWITCH=0`; any other value, or none, leaves it on. It has no
-setting in `config.json` yet.
+- **Which AI.** For one model's own limit, the same AI's default model first;
+  then the backups chosen for the bot or in Automatic recovery; then the AI a
+  new bot would get. Only an AI that can run a turn now (installed, signed in,
+  allowed by your organisation, not limited itself) with the tools and the
+  working folder the current one has. Never another sign-in to the same
+  subscription, which would rotate accounts around the provider's limit; a
+  pay-per-use API key on the same AI is fine.
+- **What moves.** The person's message that met the limit is sent again on that
+  AI, in that conversation alone; the bot's own model and its other
+  conversations stay where they are. While the limit lasts, every new turn
+  (a person's, a routine's, a webhook's) goes straight to that AI without
+  asking the limited one first, and a routine run the limit stopped starts
+  again on it.
+- **How long.** The limited AI is held until the reset it named, or for an hour
+  when it named none. One model's own limit holds that model alone, and for at
+  most six hours before it is tried again. A conversation that moved goes back
+  once its AI's limit has reset, with one line saying so.
+
+This is on by default. Start the server with `OMB_QUOTA_SWITCH=0` to switch it
+off: then only the backups Automatic recovery names take over, and the
+notification says the bot waits. Any other value, or none, leaves it on. It
+has no setting in `config.json` yet.
+
+### Which engine a new bot uses
+
+A saved default model (Settings, `openmausbot setup`, or the New Bot
+defaults) always wins. Without one, new bots get the first engine that can
+run, in this order: a Claude account, a ChatGPT plan, Gemini, Grok, then the
+rest in the order of `instances`; OpenCode running only Zen's free no-login
+models comes last.
+
+The server picks at once at start, then sends the person's own engines one
+tiny test message each in the background ("Reply with the single word OK",
+90 seconds at most), best first, stopping at the first that answers. One
+miss alone doesn't move the default: that engine is tried again two minutes
+later. Two misses in a row move the default to the best engine that
+answered; the engine is tried again ten minutes later, then once an hour.
+An engine that already answered (for example one the welcome checked) can
+take the default after a single miss. An organization's models and the
+trial credit are never tested this way. Results are kept for a day per
+engine and sign-in in `<data dir>/providers/ai-checks.json`, so a restart
+doesn't send them again. On a later start, where the engines are read one at
+a time, nothing is tested or moved until that read ends: never on the status
+the last run recorded.
+
+The first bot the app made follows the default until someone writes to it
+or picks a model for it or one of its conversations: it moves only after a
+test result, only to an engine that answered, and only away from one whose
+latest test missed or that is signed out or turned off, or up to a better
+one. A status read that timed out moves nothing. No other bot ever moves. To stop the
+background test messages, start the server with `OMB_AI_CHECKS=0`.
 
 ### The decision log
 
@@ -1139,6 +1183,27 @@ the bot then answered. With the loop guard on, set `loopGuard.correctiveRounds`
 (0-5, default 0) and such a bot is sent back to re-run the failed call up to
 that many times first; the turn counts as done only if the tools it runs after
 that succeed. A tool call that was denied is never sent back.
+
+## A turn that goes silent
+
+The server stops a turn that has sent it nothing for 20 minutes
+(`OMB_TURN_STALL_MS`) and says why in the chat. Engines report a tool only
+when it starts and when it ends, so while one of the turn's tools is still
+running the turn may stay silent for up to `OMB_TOOL_STALL_MS` (default 2
+hours). Any event from the turn starts the silence over, and time spent waiting
+on a person or a computer never counts. Either way the turn stops with "no
+activity for N minutes".
+
+Both take whole milliseconds. `OMB_TURN_STALL_MS` is never below 60000 (one
+minute) and `OMB_TOOL_STALL_MS` never below `OMB_TURN_STALL_MS`. A value that
+is not a positive finite number (empty, `65m`, `0`, a negative number,
+`Infinity`, `1e309`) leaves the default. Set them in the server's environment
+and restart it; the restart stops every running turn.
+
+A turn in a room also has a work ceiling of its own, `rooms.turnTimeoutMinutes`
+in `config.json` (default 5 minutes, 1-1440, which one conversation can
+replace). It stops a member's turn even while its tool runs, and these two
+settings do not change it.
 
 ## Updating
 

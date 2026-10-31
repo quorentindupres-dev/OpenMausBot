@@ -13,13 +13,13 @@ const reply = (status, body = {}) => ({ ok: status < 400, status, body });
  * the clock and its timers. `relaunch()` makes a new one-home over the same journal and server, as the app does after a
  * crash.
  */
-function world({ cloud = {}, switches = { "routine:r1": true, "routine:r2": false, "webhook:w1": true, "call:c1": true }, checks = [], moves = [], busy = [], offer } = {}) {
+function world({ cloud = {}, switches = { "routine:r1": true, "routine:r2": false, "webhook:w1": true, "call:c1": true }, checks = [], moves = [], busy = [] } = {}) {
   let journal = null, clock = 1_000_000, typedAt = 0;
   const timers = [];
   const w = {
     cloud: { origin: CLOUD, account: "acct-1", machine: CLOUD, ready: true, moves: true, ended: false, paid: false, ...cloud },
     server: { frozen: false, freezes: 0, unfreezes: 0, forgot: 0 },
-    passes: [], checked: 0, cloudCalls: [], localCalls: [], lent: [], offered: [], phone: { paired: true, stopped: 0, started: 0 }, opened: [], restarted: 0, brought: [],
+    passes: [], checked: 0, cloudCalls: [], localCalls: [], lent: [], phone: { paired: true, stopped: 0, started: 0 }, opened: [], restarted: 0, brought: [],
     again: null, version: "0.1.121",
     get journal() { return journal; },
     set journal(value) { journal = value; },
@@ -50,6 +50,7 @@ function world({ cloud = {}, switches = { "routine:r1": true, "routine:r2": fals
           async freeze() {
             const who = busy.shift();
             if (typeof who === "string") return { busy: who };
+            if (who && typeof who === "object") return who;
             if (!w.server.frozen) w.server.freezes++;
             w.server.frozen = true;
             return { frozen: true };
@@ -76,7 +77,6 @@ function world({ cloud = {}, switches = { "routine:r1": true, "routine:r2": fals
           };
         },
         lend: async (projects) => { w.lent.push(projects); },
-        offer: () => { w.offered.push(w.lent.length); return offer?.(); },
         phone: { paired: () => w.phone.paired, stop: async () => { w.phone.stopped++; }, start: async () => { w.phone.started++; } },
         openHome: () => w.opened.push("cloud"),
         openLocal: () => w.opened.push("local"),
@@ -116,24 +116,6 @@ test("a new buyer's move runs every phase and ends with home on My Cloud, this c
   assert.equal(w.lent.length, 1, "a relaunch lends nothing again");
   assert.equal(w.phone.stopped, 1);
   assert.equal(w.server.unfreezes, 0);
-});
-
-test("once this computer is lent, the move offers the rest of it, after the move and on every launch after it, without waiting for an answer", async () => {
-  const w = world();
-  await w.home.kick();
-  await Promise.resolve();
-  assert.deepEqual(w.offered, [1], "right after lending, at the switch");
-  // A computer that moved before this version: its journal is done and lent already.
-  await w.relaunch().kick();
-  await Promise.resolve();
-  assert.deepEqual(w.offered, [1, 1], "the first launch after it offers too; the offer itself asks at most once");
-  const open = world({ offer: () => new Promise(() => {}) });
-  let limit;
-  const ran = await Promise.race([open.home.kick().then(() => "done"), new Promise((resolve) => { limit = setTimeout(resolve, 2_000, "held up"); })]);
-  clearTimeout(limit);
-  assert.equal(ran, "done", "a popup left open never holds up the move");
-  assert.equal(open.journal.phase, "done");
-  assert.equal(open.phone.stopped, 1);
 });
 
 test("a Cloud too old to take a move says My Cloud is updating, never that the move fails, and the move starts once it has", async () => {
@@ -179,6 +161,24 @@ test("the freeze waits for a quiet moment: nobody typing for 30 s, and no bot st
   await w.tick();
   assert.equal(w.journal.phase, "done");
   assert.equal(w.server.freezes, 1);
+});
+
+test("the wait says what holds the move as the server names it, and claims no one before it has", async () => {
+  // Each tick runs the move twice (its timer and the kick), so each answer comes twice.
+  const signIn = { busy: "", what: "sign-in" }, room = { busy: "Launch room", what: "room" };
+  const w = world({ busy: [signIn, signIn, room, room] });
+  w.type();
+  await w.home.kick();
+  assert.deepEqual(w.home.view(), { phase: "wait" }, "nobody named yet: the person typed a moment ago");
+  w.advance(QUIET_MS);
+  await w.tick();
+  assert.deepEqual(w.home.view(), { phase: "wait", waitingFor: "", waitingWhat: "sign-in" });
+  w.advance(5_000);
+  await w.tick();
+  assert.deepEqual(w.home.view(), { phase: "wait", waitingFor: "Launch room", waitingWhat: "room" });
+  w.advance(5_000);
+  await w.tick();
+  assert.equal(w.journal.phase, "done");
 });
 
 test("a check's log line names the rooms and conversations it found missing by id, never by name, and counts the rest", () => {

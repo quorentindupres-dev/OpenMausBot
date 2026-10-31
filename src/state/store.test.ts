@@ -1041,6 +1041,17 @@ describe("config status frames", () => {
     expect(status.anthropic).toEqual({ configured: true, everyClaudeBot: false });
   });
 
+  it("keeps every saved key's hint through a live config update, so a masked key never empties", () => {
+    const status = configStatusFromFrame({
+      openai: { configured: true, last4: "a1b2" },
+      box: { configured: true, last4: "c3d4" },
+      savedKeys: { ttsKey: { configured: true, last4: "e5f6" }, openaiLiveKey: { configured: false } },
+    } as ConfigStatusFrame);
+    expect(status.openai).toEqual({ configured: true, last4: "a1b2" });
+    expect(status.box).toEqual({ configured: true, last4: "c3d4" });
+    expect(status.savedKeys).toEqual({ ttsKey: { configured: true, last4: "e5f6" }, openaiLiveKey: { configured: false } });
+  });
+
   it("keeps thread capacity and room timeout with the existing config fields", () => {
     expect(
       configStatusFromFrame({
@@ -1635,6 +1646,27 @@ describe("browser profile announcements", () => {
     });
     expect(next.bots[0]?.browserProfile).toBe(profile);
     expect(next.bots[0]?.messages).toBe(messages);
+  });
+});
+
+describe("phone grant announcements", () => {
+  const granted: Bot = {
+    id: "phone-bot", threadId: "phone-thread", name: "Pepper", title: "", description: "",
+    notifications: true, color: "green", unread: false,
+    modelSelection: { instanceId: "codex", model: "default" }, phoneApps: { location: "read" },
+    messages: [{ id: "message", role: "user", kind: "text", at: 1, text: "Keep this conversation" }],
+  };
+  const { messages, phoneApps: _old, ...announcement } = granted;
+
+  it("clears a stale grant when a complete frame omits it", () => {
+    const next = reducer({ ...initialState, bots: [granted] }, { type: "botPatched", bot: announcement });
+    expect(next.bots[0]?.phoneApps).toBeUndefined();
+    expect(next.bots[0]?.messages).toBe(messages);
+  });
+
+  it("clears it on the thread-snapshot path too", () => {
+    const next = reducer({ ...initialState, bots: [{ ...granted, awaitingThreadSnapshot: true }] }, { type: "botPatched", bot: { ...announcement, messages } });
+    expect(next.bots[0]?.phoneApps).toBeUndefined();
   });
 });
 
@@ -2504,6 +2536,14 @@ describe("activity panel", () => {
     expect(reducer(suggested, { type: "showFiles", suggest: [] }).filesSuggest).toBeNull();
     expect(reducer(suggested, { type: "showTeamMap" })).toMatchObject({ activeView: "team-map", filesSuggest: null });
   });
+
+  it("a pinned web panel replaces the main view like the team map, and chat comes back", () => {
+    const open = { ...initialState, activityOpen: true, computerOpen: true, settingsOpen: true };
+    const panel = reducer(open, { type: "showWebPanel", id: "panel-1" });
+    expect(panel).toMatchObject({ activeView: "web-panel", webPanelId: "panel-1", activityOpen: false, computerOpen: false, settingsOpen: false });
+    expect(reducer(panel, { type: "showTeamMap" })).toMatchObject({ activeView: "team-map", webPanelId: "panel-1" });
+    expect(reducer(panel, { type: "showChat" }).activeView).toBe("chat");
+  });
 });
 
 describe("live config frames", () => {
@@ -2520,6 +2560,12 @@ describe("live config frames", () => {
     const automaticRecovery = { enabled: true, backup: { instanceId: "backup", model: "fixture-model" } };
     expect(configStatusFromFrame({ ...baseFrame, automaticRecovery }).automaticRecovery).toEqual(automaticRecovery);
     expect(configStatusFromFrame({ ...baseFrame, automaticRecovery: { enabled: false } }).automaticRecovery).toEqual({ enabled: false });
+  });
+
+  it("keeps a Team Cloud's team through live config refreshes, so its people stay in the @ list", () => {
+    const team = { id: "team-acme", name: "Acme", cloudPage: "https://cloud.example.test/cloud" };
+    expect(configStatusFromFrame({ ...baseFrame, team }).team).toEqual(team);
+    expect(configStatusFromFrame(baseFrame)).not.toHaveProperty("team");
   });
 
   it("keeps an OMB Cloud home's flag through live config refreshes, and adds none elsewhere", () => {

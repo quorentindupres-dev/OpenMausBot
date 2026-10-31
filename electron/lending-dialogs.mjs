@@ -1,26 +1,7 @@
-// Security: lending this computer lets bots read its folders, run commands or act in its apps as the person. These are
-// main's own dialogs, which no page (this computer's or a server's) can draw or answer, and each one defaults to Cancel
-// but Use my Mac, which shows only after a few seconds with no typing, so a key meant for the page never answers it.
+// Security: sharing this computer with a server lets its bots read its folders, run commands or act in its apps as the
+// person. These are main's own dialogs, which no page (this computer's or a server's) can draw or answer, and each one
+// defaults to Cancel.
 import { randomUUID } from "node:crypto";
-
-/** The word the person knows this computer by, and the popup's button. */
-const USE_WORDS = Object.freeze({
-  darwin: { computer: "this Mac", use: "Use my Mac" },
-  win32: { computer: "this PC", use: "Use my PC" },
-  other: { computer: "this computer", use: "Use this computer" },
-});
-
-/** "Use my Mac": the popup's question, its one line and its buttons. `screen`: apps and screen can be lent here. */
-export function useMyComputerText(platform, { screen }) {
-  const words = USE_WORDS[platform] ?? USE_WORDS.other;
-  return {
-    message: `Let your bots use ${words.computer}?`,
-    detail: screen
-      ? "Like before, they can use its internet connection, read your Desktop, Documents and Downloads, and use your apps and screen."
-      : "Like before, they can use its internet connection and read your Desktop, Documents and Downloads.",
-    buttons: [words.use, "Not now"],
-  };
-}
 
 export function serverAccessDetail(env, { folders, terminal, computer }) {
   return [
@@ -40,14 +21,8 @@ export function serverAccessDetail(env, { folders, terminal, computer }) {
  *   isHome?: (path: string) => Promise<boolean>,
  * }} deps
  */
-export function createLendingDialogs({ dialog, window, validate, isHome = async () => false, platform = process.platform }) {
+export function createLendingDialogs({ dialog, window, validate, isHome = async () => false }) {
   return {
-    /** Use my Mac, asked in `parent`: "use" or "later". */
-    async useMyComputer(parent, { screen }) {
-      const { message, detail, buttons } = useMyComputerText(platform, { screen });
-      const { response } = await dialog.showMessageBox(parent, { type: "question", message, detail, buttons, defaultId: 0, cancelId: 1, noLink: true });
-      return response === 0 ? "use" : "later";
-    },
     /** The folder or drive the person picks, read only and checked as every lent folder is; null when they cancel. The
      * home folder is lent only when it is picked here and confirmed here: the folders above it and the system disk never are. */
     async chooseFolder(title) {
@@ -67,17 +42,6 @@ export function createLendingDialogs({ dialog, window, validate, isHome = async 
     },
     async confirmServerAccess(env, grant) {
       const { response } = await dialog.showMessageBox(window(), { type: "warning", message: `Allow computer access for ${env.name}?`, detail: serverAccessDetail(env, grant), buttons: ["Allow access", "Cancel"], defaultId: 1, cancelId: 1 });
-      return response === 0;
-    },
-    /** Apps and screen asked for from My Cloud's page: false when there is no window to ask in. */
-    async confirmScreen() {
-      const parent = window();
-      if (!parent || parent.isDestroyed()) return false;
-      const { response } = await dialog.showMessageBox(parent, {
-        type: "warning", message: "Let your bots on My Cloud use your apps and screen?",
-        detail: "In your own conversations and routines, they can see your screen, click and type in your apps as you, while this computer is awake with OpenMausBot open. That reaches anything those apps can reach. You can turn it off at any time on My Cloud's page or in Settings → MausBot Cloud.",
-        buttons: ["Lend apps and screen", "Cancel"], defaultId: 1, cancelId: 1,
-      });
       return response === 0;
     },
   };

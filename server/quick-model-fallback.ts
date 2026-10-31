@@ -1,7 +1,7 @@
 // A short message moved to the engine's quick model runs again on the bot's own model when the provider refuses the
 // quick model (OpenAI answers 400 invalid_request_error for gpt-5.4-mini on a ChatGPT-account Codex). The retry keeps
 // the first turn's id and the refusal never reaches the bus, so the conversation sees one turn with one reply. The
-// refused model is kept per engine instance and never picked for a quick turn there again.
+// refused model is kept per engine instance and never picked for a quick turn or background text there again.
 import { readFileSync } from "node:fs";
 
 import type { EffortLevel } from "../shared/wire.ts";
@@ -25,13 +25,27 @@ export interface QuickRoute {
 
 type Engine = { instanceId: string; adapter: Pick<ProviderAdapter, "sendTurn" | "interruptTurn"> };
 
-interface Armed {
+/** An engine turn that runs again in place of a turn the conversation already shows. */
+export interface RetriedTurn {
+  /** The turn the conversation shows. */
+  turnId?: string;
+  /** The engine's new turn: its sendTurn's id, or else the first other turn id seen. */
+  retryTurnId?: string;
+}
+
+/** The retry's event under the shown turn's id; "dropped" for the retry's own turn.started; null for any other turn's event. */
+export function retriedTurnEvent(turn: RetriedTurn, event: RuntimeEvent): RuntimeEvent | "dropped" | null {
+  if (!turn.turnId || !event.turnId || event.turnId === turn.turnId) return null;
+  turn.retryTurnId ??= event.turnId;
+  if (event.turnId !== turn.retryTurnId) return null;
+  if (event.type === "turn.started") return "dropped";
+  return { ...event, turnId: turn.turnId } as RuntimeEvent;
+}
+
+interface Armed extends RetriedTurn {
   engine: Engine;
   input: SendTurnInput;
   quick: QuickRoute;
-  /** The quick turn's id: the one the conversation keeps through a retry. */
-  turnId?: string;
-  retryTurnId?: string;
   phase: "quick" | "refused" | "retrying";
   /** The refusal and the rest of the quick turn, published only if no retry runs. */
   held: RuntimeEvent[];
@@ -114,11 +128,10 @@ export class QuickModelFallback {
       return true;
     }
     if (event.turnId === armed.turnId) return true;
-    armed.retryTurnId ??= event.turnId;
-    if (event.turnId !== armed.retryTurnId) return false;
-    if (event.type === "turn.started") return true;
-    const kept = { ...event, turnId: armed.turnId } as RuntimeEvent;
-    if (event.type === "turn.completed") this.settle(armed, kept);
+    const kept = retriedTurnEvent(armed, event);
+    if (kept === null) return false;
+    if (kept === "dropped") return true;
+    if (kept.type === "turn.completed") this.settle(armed, kept);
     else this.deps.publish(kept);
     return true;
   }
@@ -161,7 +174,7 @@ export class QuickModelFallback {
     });
   }
 
-  private remember(instanceId: string, model: string): void {
+  remember(instanceId: string, model: string): void {
     const models = this.refusedModels.get(instanceId) ?? new Set<string>();
     if (models.has(model)) return;
     models.add(model);

@@ -31,6 +31,7 @@ import { cloneAttachments } from "./routine-attachments.ts";
 import { loadInstalledPackage, loadRoutine, loadRun } from "./routine-load.ts";
 import { sanitizeInput } from "./routine-input.ts";
 import { checkHold, CHECK_BOOT_HOLD_MS, type CheckHold } from "./routine-check-pacing.ts";
+import { resolveRoutineResultsThread, routineRunDefinition, type ResultsThreadAllocation } from "./routine-run-definition.ts";
 
 export type { RoutineContextAttachment, RoutineIntervalWindow, RoutineRunStatus, RoutineRunTrigger };
 export { intervalHasRestrictions } from "./routine-intervals.ts";
@@ -111,8 +112,8 @@ export interface RoutineRun {
   /** Time spent waiting on the person's answers, which the run limit does not count. */
   waitedMs?: number;
   triggerSource?: RoutineRunTrigger;
-  /** "app": a connected-app event started it (its triggerSource stays "webhook", an outside event). */
-  eventSource?: "app";
+  /** "app": a connected-app event started it; "wait": a wait's follow-up did (its triggerSource stays "webhook", an outside event). */
+  eventSource?: "app" | "wait";
   webhookId?: string;
   deliveryId?: string;
   sourceThreadId?: string;
@@ -193,8 +194,6 @@ interface RoutineFile {
 
 export type RoutineRequestOwner = Pick<RoutineRequestReceipt, "requestId" | "messageId" | "botId" | "threadId">;
 
-type ResultsThreadAllocation = { botId: string; threadId: string };
-
 function routineRequestOwnerKey(owner: RoutineRequestOwner): string {
   return JSON.stringify([owner.requestId, owner.messageId, owner.botId, owner.threadId]);
 }
@@ -218,7 +217,7 @@ export interface RoutineManagerOptions {
   /** Every payload must be `{ kind, … }`: the server numbers and replays frames by it. */
   emit?: (payload: Record<string, unknown>) => void;
   botState: (botId: string) => "ready" | "busy" | "missing";
-  goalState?: (groupId: string, coordinatorBotId: string) => "ready" | "busy" | "missing";
+  goalState?: (groupId: string | undefined, coordinatorBotId: string) => "ready" | "busy" | "missing";
   createTask: (botId: string, title: string, run?: RoutineRun) => { threadId: string } | null;
   joinConversation?: (run: RoutineRun) => string | null;
   createGoalTask?: (groupId: string, title: string) => { threadId: string } | null;
@@ -236,7 +235,7 @@ export interface RoutineManagerOptions {
     onDispatchError: (message: string) => void,
   ) => Promise<void>;
   startGoal?: (
-    groupId: string,
+    groupId: string | undefined,
     threadId: string,
     prompt: string,
     coordinatorBotId: string,
@@ -245,7 +244,7 @@ export interface RoutineManagerOptions {
   ) => Promise<void>;
   interruptTurn?: (botId: string, threadId: string) => Promise<void>;
   interruptGoal?: (
-    groupId: string,
+    groupId: string | undefined,
     threadId: string,
     outcome?: { status: "stopped" | "limit-reached"; detail: string },
   ) => Promise<void>;
@@ -260,7 +259,7 @@ export interface RoutineManagerOptions {
   /** When an engine's usage limit resets (epoch ms), or null while that is not known. */
   limitResetAt?: (engine: string) => number | null;
   /** The bot has a backup engine to continue on when its own engine's usage limit refuses a run. */
-  limitBackup?: (botId: string) => boolean;
+  limitBackup?: (botId: string, scope?: "engine" | "model" | "credits") => boolean;
   /** Work this thread handed to another bot is still open, so its wait is not only on the person. */
   handedOffWorkLive?: (threadId: string) => boolean;
   launchId?: string;
@@ -694,7 +693,7 @@ export class RoutineManager {
       run.finishedAt = this.now();
       run.error = "The assigned bot was deleted";
       this.emitRun(run);
-      if (run.threadId && run.target === "room-goal" && run.groupId) void this.options.interruptGoal?.(run.groupId, run.threadId).catch(() => {});
+      if (run.threadId && run.target === "room-goal") void this.options.interruptGoal?.(run.groupId, run.threadId).catch(() => {});
       else if (run.threadId) void this.options.interruptTurn?.(run.botId, run.threadId).catch(() => {});
     }
     const kept = this.runs.filter((run) => run.botId !== botId);
@@ -732,6 +731,7 @@ export class RoutineManager {
   }
 
   runNow(id: string, request?: RoutineRequestCommitFor<"run_now">): RoutineRun | null {
+    if (this.closing) return null;
     if (request) {
       const receipt = this.matchingRoutineRequestReceipt(request);
       if (receipt) {
@@ -751,7 +751,7 @@ export class RoutineManager {
     }, () => this.discardResultsThreads(allocations));
     if (routine.resultsThreadId !== previousDestination) this.emitRoutine(routine);
     this.emitRun(run);
-    queueMicrotask(() => void this.tick());
+    queueMicrotask(() => this.tickInBackground());
     return cloneRun(run);
   }
 
@@ -766,14 +766,10 @@ export class RoutineManager {
   }
 
   enqueueWebhook(input: {
-    webhookId: string;
-    webhookName: string;
-    prompt: string;
-    botId: string;
-    runOn: RoutineRunOn;
-    deliveryId: string;
-    receivedAt: number;
-    eventSource?: "app";
+    webhookId: string; webhookName: string; prompt: string; botId: string; runOn: RoutineRunOn; deliveryId: string; receivedAt: number;
+    eventSource?: "app" | "wait";
+    /** Where the run reports, instead of the event's own results chat. */
+    resultsThreadId?: string;
   }): { id: string } {
     this.assertWritable();
     const existing = this.webhookRunReceipt(input.webhookId, input.deliveryId);
@@ -785,7 +781,7 @@ export class RoutineManager {
       id: randomUUID(), routineId: input.webhookId, routineName: input.webhookName, prompt: input.prompt, target: "bot",
       botId: input.botId, runOn: input.runOn, scheduledFor: input.receivedAt, status: "queued", manual: false,
       triggerSource: "webhook", webhookId: input.webhookId, deliveryId: input.deliveryId, attachments: [], createdAt: this.now(),
-      resultsThreadId: this.options.eventResultsThread?.(input), ...(input.eventSource ? { eventSource: input.eventSource } : {}),
+      resultsThreadId: input.resultsThreadId ?? this.options.eventResultsThread?.(input), ...(input.eventSource ? { eventSource: input.eventSource } : {}),
     };
     this.commitEvent(run, input.deliveryId, () => { this.runs.push(run); });
     return cloneRun(run);
@@ -823,7 +819,7 @@ export class RoutineManager {
       throw error;
     }
     this.emitRun(run);
-    queueMicrotask(() => void this.tick());
+    queueMicrotask(() => this.tickInBackground());
   }
 
   activeWebhookRunCount(webhookId: string): number {
@@ -857,13 +853,13 @@ export class RoutineManager {
     this.save();
     this.emitRun(run);
     if (run.threadId) {
-      if (run.target === "room-goal" && run.groupId) {
+      if (run.target === "room-goal") {
         await this.options.interruptGoal?.(run.groupId, run.threadId).catch(() => {});
       } else {
         await this.options.interruptTurn?.(run.botId, run.threadId).catch(() => {});
       }
     }
-    queueMicrotask(() => void this.tick());
+    queueMicrotask(() => this.tickInBackground());
     return cloneRun(run);
   }
 
@@ -946,12 +942,13 @@ export class RoutineManager {
   }
 
   get isTicking(): boolean { return this.ticking; }
+  private tickInBackground(): void { this.tick().catch((error) => console.error("routines: a scheduler pass failed", error)); }
 
   start() {
-    if (this.timer) return;
+    if (this.closing || this.timer) return;
     if (!this.startupRunsQueued) this.startupRunsQueued = this.queueStartupRuns();
-    void this.tick();
-    this.timer = setInterval(() => void this.tick(), 10_000);
+    this.tickInBackground();
+    this.timer = setInterval(() => this.tickInBackground(), 10_000);
     this.timer.unref?.();
   }
 
@@ -1004,7 +1001,7 @@ export class RoutineManager {
   }
 
   async tick(): Promise<void> {
-    if (this.ticking) return;
+    if (this.closing || this.ticking) return;
     this.ticking = true;
     try {
       const now = this.now();
@@ -1013,15 +1010,16 @@ export class RoutineManager {
           activeMs(run, now) < run.timeoutMinutes * 60_000) continue;
         await this.stopRun(run, `Stopped after reaching the ${run.timeoutMinutes}-minute run limit`, "limit-reached");
       }
-      const dueRoutines = this.routines.filter((routine) => routine.enabled && this.targetState(routine) !== "missing" && (!routine.checks
+      const isDue = (routine: Routine) => !this.closing && routine.enabled && this.targetState(routine) !== "missing" && (!routine.checks
         ? routine.nextRunAt != null && routine.nextRunAt <= now
-        : now >= this.bootedAt + CHECK_BOOT_HOLD_MS && [routine.nextRunAt, routine.wakeAt].some((at) => at != null && at <= now)));
+        : now >= this.bootedAt + CHECK_BOOT_HOLD_MS && [routine.nextRunAt, routine.wakeAt].some((at) => at != null && at <= now));
       // An unanswered wait gives way to its routine's next occurrence, which would otherwise be skipped behind it.
-      for (const routine of dueRoutines) {
+      for (const routine of this.routines.filter(isDue)) {
         if (routine.checks || runsOnce(routine.schedule) || now - routine.nextRunAt! > CATCH_UP_MS) continue;
         const stale = this.runs.filter((run) => run.routineId === routine.id && supersededBy(routine.nextRunAt!, run, this.options.handedOffWorkLive));
         for (const run of stale) await this.cancelRun(run.id, ROUTINE_SUPERSEDED);
       }
+      const dueRoutines = this.routines.filter(isDue);
       const scheduledRuns: RoutineRun[] = [];
       const allocations: ResultsThreadAllocation[] = [];
       const checks: Array<{ id: string; hold?: CheckHold }> = [];
@@ -1077,10 +1075,11 @@ export class RoutineManager {
       for (const run of scheduledRuns) {
         if (run.status === "missed") this.options.onRunFailed?.(cloneRun(run));
       }
-      for (const { id, hold } of checks) void this.runChecks(id, hold);
+      for (const { id, hold } of checks) this.runChecks(id, hold).catch((error) => console.error(`routines: the checks of ${id} failed`, error));
 
       // Oldest first, by id: a rollback across awaits can replace the run objects.
       for (const id of this.runs.map((run) => run.id)) {
+        if (this.closing) return;
         const run = this.runs.find((candidate) => candidate.id === id);
         if (!run || run.status !== "queued" || (run.retryAt ?? 0) > now) continue;
         const triggerSource = run.triggerSource ?? (run.manual ? "manual" : "schedule");
@@ -1107,7 +1106,7 @@ export class RoutineManager {
         }
         const checked = triggerSource === "webhook" || run.checkKey ? undefined : this.routines.find((routine) => routine.id === run.routineId && routine.checks);
         if (checked) {
-          void this.runChecks(checked.id, checkHold(this.runs, checked.id, now, run.id), run.id);
+          this.runChecks(checked.id, checkHold(this.runs, checked.id, now, run.id), run.id).catch((error) => console.error(`routines: the checks of ${checked.id} failed`, error));
           continue;
         }
         const sameRoutineWorking = triggerSource === "schedule" && this.runs.some(other =>
@@ -1134,13 +1133,13 @@ export class RoutineManager {
         const startedAt = this.now();
         const suffix = ` · ${new Date(startedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
         const title = `${run.routineName.slice(0, 80 - suffix.length).trimEnd()}${suffix}`;
-        const joined = run.target === "room-goal" ? null : run.threadId || this.options.joinConversation?.(run) || null;
+        const joined = run.threadId || (run.target === "room-goal" ? null : this.options.joinConversation?.(run)) || null;
         const task = joined
           ? { threadId: joined }
           : run.target === "room-goal"
           ? run.groupId
             ? this.options.createGoalTask?.(run.groupId, title) ?? null
-            : null
+            : this.options.createTask(run.botId, title, run)
           : this.options.createTask(run.botId, title, run);
         if (!task) {
           this.failRun(run, run.target === "room-goal"
@@ -1148,20 +1147,18 @@ export class RoutineManager {
             : "Could not create a task for this run");
           continue;
         }
-        run.threadId = task.threadId;
-        run.startedAt = startedAt;
-        run.status = "running";
-        this.save();
+        Object.assign(run, { threadId: task.threadId, startedAt, status: "running" } satisfies Partial<RoutineRun>);
+        try { this.save(); } catch (error) { Object.assign(run, { status: "queued", startedAt: undefined } satisfies Partial<RoutineRun>); throw error; }
         this.emitRun(run);
         try {
           const prompt = run.prompt ?? this.routines.find((r) => r.id === run.routineId)?.prompt;
           if (!prompt) {
-            this.failThread(task.threadId, "The routine was deleted before it could start");
+            this.failThread(task.threadId, "The routine was deleted before it could start", { cause: "refused" });
             continue;
           }
           const triggerSource = run.triggerSource ?? (run.manual ? "manual" : "schedule");
           if (run.target === "room-goal") {
-            if (!run.groupId || !this.options.startGoal) {
+            if (!this.options.startGoal) {
               this.failThread(task.threadId, "Room goal routines are unavailable");
               continue;
             }
@@ -1171,7 +1168,7 @@ export class RoutineManager {
               prompt,
               run.botId,
               run.id,
-              (message) => this.failThread(task.threadId, message),
+              (message) => this.failThread(task.threadId, message, { cause: "refused" }),
             );
           } else {
             await this.options.startTurn(
@@ -1180,7 +1177,7 @@ export class RoutineManager {
               composeExecutionPrompt({ name: run.routineName, trigger: triggerSource, runOn: run.runOn ?? "maus" }, prompt, run.attachments, continuityCarry(run, this.routines, this.runs), run.retried),
               run.runOn ?? "maus",
               triggerSource,
-              (message) => this.failThread(task.threadId, message),
+              (message) => this.failThread(task.threadId, message, { cause: "refused" }),
             );
           }
         } catch (error) {
@@ -1196,7 +1193,8 @@ export class RoutineManager {
    * Nothing new leaves no run behind a scheduled check, and a quiet completed one behind a manual check. */
   private async runChecks(routineId: string, hold: CheckHold | undefined, manual?: string): Promise<void> {
     const hook = this.options.checks, key = manual ?? routineId, routine = this.routines.find((candidate) => candidate.id === routineId);
-    if (!hook || !routine || this.checking.has(key)) return;
+    if (this.closing || !hook || !routine || this.checking.has(key)) return;
+    const revision = routine.updatedAt;
     this.checking.add(key);
     let result: RoutineCheckResult;
     try {
@@ -1209,9 +1207,13 @@ export class RoutineManager {
     }
     const current = this.routines.find((candidate) => candidate.id === routineId);
     const queued = manual === undefined ? undefined : this.runs.find((run) => run.id === manual && run.status === "queued");
-    if (!current?.checks || (manual === undefined ? !current.enabled : !queued)) {
+    if (this.closing || !current?.checks || (manual === undefined ? !current.enabled : !queued)) {
       if (result.run) hook.release(result.run.key);
       return;
+    }
+    if (current.updatedAt !== revision) {
+      if (result.run) hook.release(result.run.key);
+      return this.runChecks(routineId, hold, manual);
     }
     const allocations: ResultsThreadAllocation[] = [];
     let run: RoutineRun | undefined;
@@ -1222,6 +1224,11 @@ export class RoutineManager {
           result.trouble || result.run ? {} : { checkedAt: this.now() });
         if (result.run) {
           run = queued ?? this.newRun(current, this.now(), false, allocations);
+          if (queued) Object.assign(run, routineRunDefinition(current), {
+            timeoutMinutes: current.timeoutMinutes,
+            resultsThreadId: resolveRoutineResultsThread(current, this.options.resolveResultsThread, allocations, this.now(), run.sourceThreadId),
+          });
+          if (run.timeoutMinutes === undefined) delete run.timeoutMinutes;
           Object.assign(run, { prompt: result.run.prompt, checkKey: result.run.key });
         } else if (queued && !result.trouble) {
           Object.assign(queued, { status: "completed", output: "Nothing new since the last check", report: { state: "quiet" }, finishedAt: this.now() } satisfies Partial<RoutineRun>);
@@ -1229,12 +1236,12 @@ export class RoutineManager {
       }, () => this.discardResultsThreads(allocations));
     } catch (error) {
       if (result.run) hook.release(result.run.key);
-      throw error;
+      return console.error(`routines: could not save the checks of ${routineId}`, error);
     }
     this.emitRoutine(current);
     if (queued && !result.run && result.trouble) this.failRun(queued, result.trouble);
     else if (run ?? queued) this.emitRun((run ?? queued)!);
-    if (run) queueMicrotask(() => void this.tick());
+    if (run) queueMicrotask(() => this.tickInBackground());
   }
 
   handleRuntimeEvent(event: RuntimeEvent): RoutineRun | null {
@@ -1288,7 +1295,7 @@ export class RoutineManager {
     }
     this.save();
     this.emitRun(run);
-    if (event.type === "turn.completed") queueMicrotask(() => void this.tick());
+    if (event.type === "turn.completed") queueMicrotask(() => this.tickInBackground());
     return cloneRun(run);
   }
 
@@ -1306,7 +1313,7 @@ export class RoutineManager {
   private settleFailure(run: RoutineRun, failure: string, facts: RoutineFailureFacts) {
     this.failureFacts.delete(run.id);
     if (this.closing) return;
-    const backupReady = facts.limitResetsAt !== undefined && this.options.limitBackup?.(run.botId) === true;
+    const backupReady = (facts.limit !== undefined || facts.limitResetsAt !== undefined) && this.options.limitBackup?.(run.botId, facts.limit) === true;
     const recovery = recoverRun(run, failure, { ...facts, ...(backupReady ? { backupReady } : {}) }, this.now(), this.ownerNotices);
     if (!recovery.queued) this.failRun(run, recovery.error, "failed", recovery.alert);
     else {
@@ -1314,7 +1321,7 @@ export class RoutineManager {
       this.emitRun(run);
       if (recovery.alert) this.options.onRunDeferred?.(cloneRun(run), recovery.alert);
     }
-    queueMicrotask(() => void this.tick());
+    queueMicrotask(() => this.tickInBackground());
   }
 
   finishGoalRun(runId: string, status: GroupGoalRunStatus, detail: string): RoutineRun | null {
@@ -1346,7 +1353,7 @@ export class RoutineManager {
       this.save();
       this.emitRun(run);
     }
-    queueMicrotask(() => void this.tick());
+    queueMicrotask(() => this.tickInBackground());
     return cloneRun(run);
   }
 
@@ -1361,7 +1368,7 @@ export class RoutineManager {
     if (run.target === "room-goal") run.goalStatus = status;
     this.failRun(run, detail);
     if (!run.threadId) return;
-    if (run.target === "room-goal" && run.groupId) await this.options.interruptGoal?.(run.groupId, run.threadId, { status, detail }).catch(() => {});
+    if (run.target === "room-goal") await this.options.interruptGoal?.(run.groupId, run.threadId, { status, detail }).catch(() => {});
     else await this.options.interruptTurn?.(run.botId, run.threadId).catch(() => {});
   }
 
@@ -1392,7 +1399,7 @@ export class RoutineManager {
 
   private targetState(target: Pick<RoutineRun, "target" | "groupId" | "botId">): "ready" | "busy" | "missing" {
     if (target.target === "room-goal") {
-      if (!target.groupId || !this.options.goalState) return "missing";
+      if (!this.options.goalState) return "missing";
       return this.options.goalState(target.groupId, target.botId);
     }
     return this.options.botState(target.botId);
@@ -1417,38 +1424,17 @@ export class RoutineManager {
     allocations: ResultsThreadAllocation[],
     sourceThreadId = routine.sourceThreadId,
   ): RoutineRun {
-    let resultsThreadId = routine.resultsThreadId;
-    if (routine.target === "bot" && this.options.resolveResultsThread) {
-      const destination = this.options.resolveResultsThread({ ...routine, sourceThreadId }, false);
-      const own = destination?.main ? undefined : destination?.threadId;
-      if (own !== routine.resultsThreadId) {
-        if (own) allocations.push({ botId: routine.botId, threadId: own });
-        if (own) routine.resultsThreadId = own;
-        else delete routine.resultsThreadId;
-        routine.updatedAt = Math.max(this.now(), routine.updatedAt + 1);
-      }
-      resultsThreadId = destination?.threadId;
-    }
+    const resultsThreadId = resolveRoutineResultsThread(routine, this.options.resolveResultsThread, allocations, this.now(), sourceThreadId);
     const run: RoutineRun = {
       id: randomUUID(),
       routineId: routine.id,
-      routineName: routine.name,
-      prompt: routine.prompt,
-      durationMinutes: routine.durationMinutes,
-      ...(routine.timeoutMinutes === undefined ? {} : { timeoutMinutes: routine.timeoutMinutes }),
-      attachments: cloneAttachments(routine.attachments),
-      target: routine.target,
-      groupId: routine.groupId,
-      botId: routine.botId,
-      runOn: routine.runOn ?? "maus",
+      ...routineRunDefinition(routine),
       scheduledFor,
       status: "queued",
       manual,
       triggerSource: manual ? "manual" : "schedule",
       sourceThreadId,
       resultsThreadId,
-      ...(routine.access ? { access: routine.access } : {}),
-      ...(routine.deliver ? { deliver: routine.deliver } : {}),
       createdAt: this.now(),
     };
     this.runs.push(run);

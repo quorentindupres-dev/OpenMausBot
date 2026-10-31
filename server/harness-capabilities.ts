@@ -11,6 +11,8 @@ const ENVELOPE: CatalogProfile = {
   skillAuthoring: true,
   sharedComputers: true,
   voiceNotes: true,
+  computerSelection: true,
+  activeWaits: true,
   cloudHome: false,
   chief: true,
   botId: "",
