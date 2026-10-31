@@ -1,15 +1,19 @@
 {
   "id": "xlabs-spaces",
   "name": "X-Labs Spaces & AGY Plugin",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "ownedDirs": [
     "src/components/space",
-    "server/space"
+    "server/space",
+    "server/agent-computers"
   ],
   "ownedFiles": [
     "shared/space.ts",
+    "shared/agent-computers.ts",
     "server/routes/space.ts",
-    "server/drivers/agents-space-tools.ts"
+    "server/drivers/agents-space-tools.ts",
+    "scripts/setup-agent-mac.sh",
+    "docs/agent-computers-cua.md"
   ],
   "seams": [
     {
@@ -242,6 +246,69 @@
           "find": "  \"sidebar.room.setDescription\": \"Set description\"\n}",
           "replace": "  \"sidebar.room.setDescription\": \"Set description\",\n  \"computer.tab.page\": \"Page\",\n  \"quest.toggle.board\": \"Spaces\"\n}",
           "check": "quest.toggle.board"
+        }
+      ]
+    },
+    {
+      "file": "tsconfig.json",
+      "marker": "@xlabs/space-canvas",
+      "description": "Map @xlabs/space-canvas path aliases in tsconfig.json",
+      "patches": [
+        {
+          "find": "      \"@/*\": [\"src/*\"]\n    }",
+          "replace": "      \"@/*\": [\"src/*\"],\n      \"@xlabs/space-canvas\": [\"../G_app-Space-Canvas/src/index.ts\"],\n      \"@xlabs/space-canvas/*\": [\"../G_app-Space-Canvas/src/*\"]\n    }",
+          "check": "\"@xlabs/space-canvas\""
+        }
+      ]
+    },
+    {
+      "file": "vite.config.ts",
+      "marker": "@xlabs/space-canvas",
+      "description": "Resolve and bundle @xlabs/space-canvas in Vite with React/Lucide dedupe",
+      "patches": [
+        {
+          "find": "      \"@\": fileURLToPath(new URL(\"./src\", import.meta.url)),\n    },",
+          "replace": "      \"@\": fileURLToPath(new URL(\"./src\", import.meta.url)),\n      \"@xlabs/space-canvas\": fileURLToPath(new URL(\"../G_app-Space-Canvas/src\", import.meta.url)),\n    },\n    dedupe: [\"react\", \"react-dom\", \"lucide-react\"],",
+          "check": "\"@xlabs/space-canvas\""
+        },
+        {
+          "find": "  server: {\n    // IPv4 explicitly",
+          "replace": "  server: {\n    fs: {\n      allow: [root, fileURLToPath(new URL(\"../G_app-Space-Canvas\", import.meta.url))],\n    },\n    // IPv4 explicitly",
+          "check": "allow: [root,"
+        }
+      ]
+    },
+    {
+      "file": "src/styles.css",
+      "marker": "G_app-Space-Canvas/src",
+      "description": "Scan @xlabs/space-canvas source in Tailwind v4",
+      "patches": [
+        {
+          "find": "@import \"tailwindcss\";",
+          "replace": "@import \"tailwindcss\";\n@source \"../../G_app-Space-Canvas/src\";",
+          "check": "G_app-Space-Canvas/src"
+        }
+      ]
+    },
+    {
+      "file": "src/components/NewBotDialog.tsx",
+      "marker": "A01NewBotSection",
+      "description": "Mount A01 Registered Role + C02 Project + Agent Computer selector in NewBotDialog",
+      "patches": [
+        {
+          "find": "import { Select } from \"./Select\";",
+          "replace": "import { Select } from \"./Select\";\nimport { A01NewBotSection, bindCreatedBotA01IfSelected } from \"./space/A01NewBotSection\";",
+          "check": "from \"./space/A01NewBotSection\""
+        },
+        {
+          "find": "        announceNewBot(parent.dispatch, bot, warnings, { showThreads, source: draft.preset ? \"preset\" : draft.role ? \"template\" : \"blank\", role: draft.role });",
+          "replace": "        announceNewBot(parent.dispatch, bot, warnings, { showThreads, source: draft.preset ? \"preset\" : draft.role ? \"template\" : \"blank\", role: draft.role });\n        await bindCreatedBotA01IfSelected(draft, bot.id);",
+          "check": "bindCreatedBotA01IfSelected(draft, bot.id)"
+        },
+        {
+          "find": "    <StartingRole draft={draft} defaultsMode={defaultsMode} />",
+          "replace": "    <StartingRole draft={draft} defaultsMode={defaultsMode} />\n    {!defaultsMode && <A01NewBotSection draft={draft} />}",
+          "check": "<A01NewBotSection draft={draft} />"
         }
       ]
     }

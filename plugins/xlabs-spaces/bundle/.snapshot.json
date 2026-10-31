@@ -1,16 +1,20 @@
 {
   "id": "xlabs-spaces",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "ownedDirs": [
     "src/components/space",
-    "server/space"
+    "server/space",
+    "server/agent-computers"
   ],
   "ownedFiles": [
     "shared/space.ts",
+    "shared/agent-computers.ts",
     "server/routes/space.ts",
-    "server/drivers/agents-space-tools.ts"
+    "server/drivers/agents-space-tools.ts",
+    "scripts/setup-agent-mac.sh",
+    "docs/agent-computers-cua.md"
   ],
-  "ownedFileCount": 32,
+  "ownedFileCount": 58,
   "seams": [
     "server/routes/table.ts",
     "server/index.ts",
@@ -22,6 +26,10 @@
     "src/components/ComputerPanel.tsx",
     "src/lib/computer-panel-view.ts",
     "src/components/computer-panel-tabs.ts",
-    "src/locales/en.json"
+    "src/locales/en.json",
+    "tsconfig.json",
+    "vite.config.ts",
+    "src/styles.css",
+    "src/components/NewBotDialog.tsx"
   ]
 }

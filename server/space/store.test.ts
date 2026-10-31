@@ -161,4 +161,103 @@ describe("the Spaces store", () => {
     expect(store.deleteCanvasNote(note.id)).toBe(false);
     expect(store.state().canvasNotes).toEqual([]);
   });
+
+  it("auto-detects C02 projectSlug from jobPath on SpaceGoal create and update", () => {
+    const { file, store } = fresh();
+    const goal = store.createGoal({
+      title: "Launch Surge VSL",
+      jobPath: "C01__work_board/surge__vsl",
+      defaultComputerProvider: "local-cua-ax",
+    });
+    expect(goal.projectSlug).toBe("surge");
+    expect(goal.defaultComputerProvider).toBe("local-cua-ax");
+
+    const manual = store.createGoal({ title: "General ops" });
+    expect(manual.projectSlug).toBeUndefined();
+    const updated = store.updateGoal(manual.id, { jobPath: "C01__work_board/precision-peptide__ads" });
+    expect(updated.projectSlug).toBe("precision-peptide");
+
+    const cleared = store.updateGoal(goal.id, { projectSlug: null, defaultComputerProvider: null });
+    expect(cleared.projectSlug).toBeUndefined();
+    expect(cleared.defaultComputerProvider).toBeUndefined();
+    expect(createSpaceStore(file).state().goals.find((g) => g.id === updated.id)?.projectSlug).toBe("precision-peptide");
+  });
+
+  it("binds and unbinds bots, manages whiteboard arrows/nodes/pinnedSessions, and auto-binds projectSlug via semantic arrows", () => {
+    const { file, store } = fresh();
+    const binding = store.bindBot("bot-mb", {
+      role: "media-buyer",
+      mode: "temporary",
+      computerProvider: "local-cua-ax",
+    });
+    expect(binding).toMatchObject({ role: "media-buyer", mode: "temporary", computerProvider: "local-cua-ax", boundAt: AT });
+    expect(store.getBotBinding("bot-mb")).toEqual(binding);
+
+    const projNode = store.addCanvasNode({
+      id: "node:proj:surge",
+      kind: "c02-project",
+      title: "Surge",
+      projectSlug: "surge",
+      layout: { x: 100, y: 100, w: 260, h: 160 },
+    });
+    const agentNode = store.addCanvasNode({
+      id: "node:agent:mb",
+      kind: "a01-agent",
+      title: "Media Buyer",
+      botId: "bot-mb",
+      a01Role: "media-buyer",
+      a01Mode: "temporary",
+      layout: { x: 460, y: 100, w: 260, h: 160 },
+    });
+    expect(projNode.id).toBe("node:proj:surge");
+    expect(agentNode.projectSlug).toBeUndefined();
+
+    // Connecting c02-project -> a01-agent automatically wires projectSlug onto both the node and botBindings[botId]!
+    const arrow = store.addCanvasArrow({
+      id: "arrow:surge-to-mb",
+      fromId: projNode.id,
+      toId: agentNode.id,
+      label: "owns ad spend",
+    });
+    expect(arrow).toMatchObject({ id: "arrow:surge-to-mb", fromId: projNode.id, toId: agentNode.id, label: "owns ad spend" });
+    expect(store.state().canvasNodes?.find((n) => n.id === agentNode.id)?.projectSlug).toBe("surge");
+    expect(store.getBotBinding("bot-mb")?.projectSlug).toBe("surge");
+
+    // Batch atomic mutation + semantic arrow wiring onto a new session node
+    const batched = store.applyWhiteboardBatch({
+      addNotes: [{ id: "note:1", text: "Scale winners", color: "green", layout: { x: 50, y: 320, w: 200, h: 140 } }],
+      addNodes: [
+        {
+          id: "node:session:s1",
+          kind: "session",
+          title: "Scout Session",
+          botId: "bot-scout",
+          a01Role: "creative-scout",
+          a01Mode: "temporary",
+          layout: { x: 460, y: 320, w: 260, h: 160 },
+        },
+      ],
+      addArrows: [{ id: "arrow:surge-to-s1", fromId: "node:proj:surge", toId: "node:session:s1" }],
+    });
+    expect(batched.canvasNotes).toHaveLength(1);
+    expect(batched.canvasNodes?.find((n) => n.id === "node:session:s1")?.projectSlug).toBe("surge");
+    expect(batched.botBindings?.["bot-scout"]).toMatchObject({
+      role: "creative-scout",
+      mode: "temporary",
+      projectSlug: "surge",
+    });
+
+    expect(store.setPinnedSessions(["thr-1", "thr-2", "thr-1"])).toEqual(["thr-1", "thr-2"]);
+
+    const reloaded = createSpaceStore(file).state();
+    expect(reloaded.pinnedSessions).toEqual(["thr-1", "thr-2"]);
+    expect(reloaded.canvasArrows).toHaveLength(2);
+    expect(reloaded.canvasNodes).toHaveLength(3);
+
+    // Deleting a node cascades its connected arrows
+    expect(store.deleteCanvasNode("node:session:s1")).toBe(true);
+    expect(store.state().canvasArrows?.map((a) => a.id)).toEqual(["arrow:surge-to-mb"]);
+    expect(store.unbindBot("bot-mb")).toBe(true);
+    expect(store.unbindBot("bot-mb")).toBe(false);
+  });
 });

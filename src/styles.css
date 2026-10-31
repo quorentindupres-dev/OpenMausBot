@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "../../G_app-Space-Canvas/src";
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
