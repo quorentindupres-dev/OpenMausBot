@@ -181,15 +181,22 @@ export function pluginSnapshot(root = DEFAULT_ROOT) {
 
   const deletedPath = join(bundleDir, ".deleted.json");
   const fallbackDeletedPath = join(DEFAULT_ROOT, BUNDLE_REL, ".deleted.json");
+  // The manifest is the only truth: a stale bundle snapshot must never claim a
+  // file is deleted when plugin.json no longer lists it.
   let deletedSnapshot = {};
-  for (const candidate of [deletedPath, fallbackDeletedPath]) {
-    if (isFilePresent(candidate)) {
-      try {
-        deletedSnapshot = JSON.parse(readFileSync(candidate, "utf8"));
-        break;
-      } catch {
-        deletedSnapshot = {};
+  if ((manifest.deletedFiles ?? []).length > 0) {
+    for (const candidate of [deletedPath, fallbackDeletedPath]) {
+      if (isFilePresent(candidate)) {
+        try {
+          deletedSnapshot = JSON.parse(readFileSync(candidate, "utf8"));
+          break;
+        } catch {
+          deletedSnapshot = {};
+        }
       }
+    }
+    for (const file of Object.keys(deletedSnapshot)) {
+      if (!(manifest.deletedFiles ?? []).includes(file)) delete deletedSnapshot[file];
     }
   }
   writeFileSync(deletedPath, `${JSON.stringify(deletedSnapshot, null, 2)}\n`, "utf8");
@@ -516,8 +523,9 @@ export function pluginRemove(root = DEFAULT_ROOT) {
       }
     }
   }
-  if (deletedSnapshot) {
+  if (deletedSnapshot && (manifest.deletedFiles ?? []).length > 0) {
     for (const [relPath, content] of Object.entries(deletedSnapshot)) {
+      if (!(manifest.deletedFiles ?? []).includes(relPath)) continue;
       const absFile = join(root, relPath);
       if (!isFilePresent(absFile) || readFileSync(absFile, "utf8") !== content) {
         mkdirSync(dirname(absFile), { recursive: true });
