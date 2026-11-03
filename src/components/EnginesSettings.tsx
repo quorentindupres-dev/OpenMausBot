@@ -359,7 +359,8 @@ function AntigravityAccountAction({ instance, action }: { instance: InstanceInfo
   </>;
 }
 
-function EngineRow({ instance, bare = false }: { instance: InstanceInfo; bare?: boolean }) {
+function EngineRow({ instance, childAccounts = [], bare = false }: { instance: InstanceInfo; childAccounts?: InstanceInfo[]; bare?: boolean }) {
+  const [addedAccountId, setAddedAccountId] = useState<string | null>(null);
   const policyNote = instance.policy && <p className="mb-2 text-[12px] leading-relaxed text-ink-secondary">
     <span className="font-medium text-ink">{t("policy.managedBy", { organization: instance.policy.organizationName })}</span> · {instance.policy.reason}
   </p>;
@@ -394,6 +395,50 @@ function EngineRow({ instance, bare = false }: { instance: InstanceInfo; bare?: 
         <div className="mt-3 space-y-3">
           {instance.snapshot.authenticated && <p className="break-words text-[12px] text-ink-secondary">{instance.snapshot.account?.email ?? t("engineSetup.antigravity.emailUnavailable")}</p>}
           <AddAccount label={t("engineSetup.antigravity.addAccount")} endpoint="/api/instances/antigravity-accounts" extra={{ sourceInstanceId: instance.instanceId }} onAdded={() => {}} />
+          {childAccounts.length > 0 && (
+            <div data-antigravity-accounts className="space-y-2.5">
+              {childAccounts.map((child) => (
+                <div
+                  key={child.instanceId}
+                  data-antigravity-account={child.instanceId}
+                  className={cn(
+                    "space-y-2 rounded-xl border p-3",
+                    addedAccountId === child.instanceId ? "border-accent/60 bg-accent/5" : "border-hairline/50 bg-panel/40",
+                  )}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-[13px] font-medium text-ink">{child.displayName}</div>
+                      <div className="truncate text-[12px] text-ink-secondary">
+                        {child.snapshot.authenticated
+                          ? (child.snapshot.account?.email ?? t("engineSetup.antigravity.emailUnavailable"))
+                          : t("model.signInRequired")}
+                      </div>
+                    </div>
+                    <AntigravityAccountAction instance={child} action="remove" />
+                  </div>
+                  {!engineReady(child) && (
+                    <EngineSetup
+                      instance={
+                        child.install?.managed
+                          ? child
+                          : {
+                              ...child,
+                              install: instance.install?.managed
+                                ? instance.install
+                                : { ...child.install, managed: { label: "Install official Antigravity", downloadBytes: 0 } },
+                            }
+                      }
+                      intent={child.access === "custom" ? "inject" : "cloud"}
+                      unframed
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <AddAccount label={t("engineSetup.antigravity.addAccount")} endpoint="/api/instances/antigravity-accounts" extra={{ sourceInstanceId: instance.instanceId }} onAdded={(newId) => setAddedAccountId(newId)} />
+
           {instance.snapshot.authenticated === true && instance.authentication?.signOut === true && <AntigravityAccountAction instance={instance} action="signOut" />}
           {instance.instanceId.startsWith("antigravity-") && <AntigravityAccountAction instance={instance} action="remove" />}
         </div>
@@ -518,13 +563,23 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
     const group = accountGroupOf(instance);
     return group && groups.get(group)?.[0] === instance ? group : null;
   };
-  const rows = listed.filter((instance) => !accountGroupOf(instance) || groupOf(instance));
+  const primaryAntigravity = listed.find(
+    (instance) => instance.driverKind === "antigravityAgent" && !instance.instanceId.startsWith("antigravity-"),
+  );
+  const antigravityChildren = primaryAntigravity
+    ? listed.filter((instance) => instance.driverKind === "antigravityAgent" && instance.instanceId.startsWith("antigravity-"))
+    : [];
+  const rows = listed.filter(
+    (instance) =>
+      (!accountGroupOf(instance) || groupOf(instance)) &&
+      !(primaryAntigravity && instance.driverKind === "antigravityAgent" && instance.instanceId.startsWith("antigravity-")),
+  );
   const isReady = (instance: InstanceInfo) => { const group = groupOf(instance); return group ? accountsReady(groups.get(group)!) : engineReady(instance); };
   const renderEngine = (instance: InstanceInfo, bare = false) => {
     const group = groupOf(instance);
     return group
       ? <AccountsCard group={group} accounts={groups.get(group)!} advanced={<EngineAdvanced instance={instance} />} bare={bare} />
-      : <EngineRow instance={instance} bare={bare} />;
+      : <EngineRow instance={instance} bare={bare} childAccounts={primaryAntigravity && instance.instanceId === primaryAntigravity.instanceId ? antigravityChildren : []} />;
   };
 
   if (simple && more) return <SimpleEngines rows={rows} isReady={isReady} renderEngine={renderEngine} more={more} />;

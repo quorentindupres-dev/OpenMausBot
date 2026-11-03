@@ -8,7 +8,7 @@ import { completionPatch } from "@/lib/onboarding";
 import { useUpdaterState } from "@/lib/updater";
 import { productName } from "../lib/brand";
 import { BrowserProfilesManager } from "./BrowserProfilesManager";
-import { NewBrowserSettings } from "./BrowserSettingsRows";
+// xlabs-spaces: NewBrowserSettings row removed (experimental browser engine off)
 import { Card, SettingRow, Switch } from "./SettingsPrimitives";
 import { LearnedSkillsSettings } from "./ShareLearnedSkillsSettings";
 import { effortLabel } from "./ModelPicker";
@@ -400,7 +400,7 @@ export function ExperimentalFeaturesRow() {
       </div>
       {error ? <p role="alert" className="mt-2 text-[12px] text-danger">{error}</p> : null}
       <LearnedSkillsSettings />
-      <NewBrowserSettings />
+        {/* xlabs-spaces: NewBrowserSettings row removed */}
     </Card>
   );
 }

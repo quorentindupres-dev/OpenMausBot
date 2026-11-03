@@ -4,6 +4,7 @@
 // when it calls it.
 import { AGENTS_PROXY_ENV } from "./agents-bridge-switch.ts";
 import { roleToolEnv } from "./chief-level.ts";
+import { spaceStore } from "./space/store.ts";
 
 /** The facts of a conversation that decide its agents tools. A settings change may change them; a turn never does. */
 export interface AgentsConversation {
@@ -46,6 +47,7 @@ export function agentsServerEnv(conversation: AgentsConversation, turn: AgentsTu
     OMB_X_RESEARCH: flag(host.x && bot.xResearch !== false),
     OMB_RESEARCH: flag(host.x && host.research && bot.xResearch !== false),
     ...roleToolEnv(bot),
+    OMB_SPACE: flag(spaceStore().state().goals.length > 0),
     OMB_ESCALATIONS: flag(host.escalations),
     OMB_COMPUTER_SELECTION: flag(!conversation.room && bot.computer !== "off" && !conversation.teamComputer),
   };

@@ -9,7 +9,7 @@ import { AppDocumentError, fetchAppDocument, type AppFetchFailure } from "./app-
 import { APP_POOL_LIMITS, useAppPoolSlot, type AppPool } from "./app-pool";
 import { AppHeader, AppInfo, AppOpenButton, AppPlaceholder, AppStrip, APP_SURFACE } from "./AppChrome";
 import { AppFrame, type AppFrameHandle, type AppFrameProblem } from "./AppFrame";
-import { PAGE_HEIGHT, PageFullScreen, PageNotes, PageToolbar, usePagePoint, usePageShare, usePageVersion } from "./PageTools";
+import { PAGE_HEIGHT, PageFullScreen, PageNotes, PageToolbar, usePagePoint, usePageShare, usePageVersion } from "./PageTools"; import { usePanelPageId } from "../space/space-ui-state";
 
 const WIDTH = "max-w-[760px]";
 const DOC_REUSE_MS = 60_000;
@@ -91,7 +91,7 @@ function AppRow({ botId, botName, threadId, message, payload, pool }: {
   const [problem, setProblem] = useState<AppFrameProblem | null>(null);
   const frame = useRef<AppFrameHandle | null>(null);
   const wide = useRef<AppFrameHandle | null>(null);
-  const [fullScreen, setFullScreen] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false); const inPanel = usePanelPageId() === message.id;
   const row = useRef<HTMLDivElement | null>(null);
   const mounted = useRef(true);
   useEffect(() => {
@@ -194,7 +194,7 @@ function AppRow({ botId, botName, threadId, message, payload, pool }: {
   const state = collapsed ? "collapsed" : current ? "live" : noPage ? "unavailable" : slot.live ? "loading" : "idle";
   const infoId = `${uid}-info`;
 
-  const body = collapsed ? null : fullScreen && current ? (
+  const body = collapsed ? null : inPanel ? <AppPlaceholder height={88}><span data-app-in-panel className="rounded-full bg-control px-3 py-1 text-[12px] text-ink-secondary">{t("quest.page.shownInPanel")}</span></AppPlaceholder> : fullScreen && current ? (
     <div data-app-box className={cn("relative w-full", bordered && "border-t border-ink/[0.08]")} style={{ height }}>
       <AppPlaceholder height={height} open={() => setFullScreen(false)} label={t("chat.preview.exitFullScreen")} />
     </div>
