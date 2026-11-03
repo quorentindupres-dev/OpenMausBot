@@ -832,7 +832,8 @@ export function pluginVendor(root = DEFAULT_ROOT, options = {}) {
   renameSync(temp, dest);
 
   const commit = spawnSync("git", ["-C", dirname(source), "rev-parse", "HEAD"], { encoding: "utf8" });
-  const pin = { source, commit: (commit.stdout ?? "").trim(), files, sha256: hash.digest("hex"), at: new Date().toISOString() };
+  // Relative source label: the pin ships with the plugin, so no absolute home path.
+  const pin = { source: `${dirname(dirname(source)).split("/").pop()}/src`, commit: (commit.stdout ?? "").trim(), files, sha256: hash.digest("hex"), at: new Date().toISOString() };
   writeFileSync(join(dirname(dest), ".pin.json"), `${JSON.stringify(pin, null, 2)}\n`, "utf8");
   return { ok: true, ...pin, dest };
 }
