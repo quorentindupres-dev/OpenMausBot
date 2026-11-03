@@ -46,7 +46,7 @@ describe("xlabs-spaces portable plugin system", () => {
     expect(status.ownedPresent).toBe(status.ownedTotal);
     expect(status.ownedTotal).toBe(12);
     expect(status.seamsPresent).toBe(status.seamsTotal);
-    expect(status.seamsTotal).toBe(28);
+    expect(status.seamsTotal).toBe(25);
     expect(status.missing).toEqual([]);
 
     const cli = spawnSync(process.execPath, [scriptPath, "status", "--json"], {
@@ -59,7 +59,7 @@ describe("xlabs-spaces portable plugin system", () => {
     const parsed = JSON.parse(cli.stdout);
     expect(parsed.ok).toBe(true);
     expect(parsed.ownedPresent).toBe(12);
-    expect(parsed.seamsPresent).toBe(28);
+    expect(parsed.seamsPresent).toBe(25);
     expect(parsed.missing).toEqual([]);
   });
 
@@ -95,7 +95,7 @@ describe("xlabs-spaces portable plugin system", () => {
     expect(snap.ok).toBe(true);
     expect(snap.bundleReady).toBe(true);
     expect(snap.ownedPresent).toBe(12);
-    expect(snap.seamsPresent).toBe(28);
+    expect(snap.seamsPresent).toBe(25);
 
     // Simulate an upstream git reset / pull that wipes owned dirs/files and strips seam markers
     for (const dir of manifest.ownedDirs) {
@@ -126,10 +126,10 @@ describe("xlabs-spaces portable plugin system", () => {
     const applied = pluginApply(root);
     expect(applied.ok).toBe(true);
     expect(applied.ownedPresent).toBe(12);
-    expect(applied.seamsPresent).toBe(28);
+    expect(applied.seamsPresent).toBe(25);
     expect(applied.missing).toEqual([]);
     expect(applied.restoredOwned).toBeGreaterThan(0);
-    expect(applied.seamsApplied).toBe(28);
+    expect(applied.seamsApplied).toBe(25);
     expect(existsSync(join(root, "src/components/space/QuestBoard.tsx"))).toBe(true);
     expect(existsSync(join(root, "shared/space.ts"))).toBe(true);
     expect(existsSync(join(root, "shared/agent-computers.ts"))).toBe(true);
@@ -261,7 +261,7 @@ describe("xlabs-spaces portable plugin system", () => {
     expect(report.ok).toBe(true);
     expect(report.counts.conflict).toBe(0);
     expect(report.counts.missingFile).toBe(0);
-    expect(report.counts.applied).toBe(28);
+    expect(report.counts.applied).toBe(25);
 
     const cli = spawnSync(process.execPath, [scriptPath, "doctor", "--json"], {
       cwd: DEFAULT_ROOT,

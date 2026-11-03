@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -783,6 +784,51 @@ export function pluginSync(root = DEFAULT_ROOT, options = {}) {
   };
 }
 
+export const VENDOR_REL = join("src", "components", "space", "vendor", "space-canvas");
+
+/** Snapshot the canvas dev repo into the layer, so the plugin never needs a sibling checkout. */
+export function pluginVendor(root = DEFAULT_ROOT, options = {}) {
+  const source = options.source ?? resolve(root, "..", "G_app-Space-Canvas", "src");
+  const dest = join(root, VENDOR_REL);
+  if (!existsSync(source)) return { ok: false, error: `canvas source not found: ${source}` };
+
+  // Vendored tests are dead cargo: the host globs only *.test.ts and its
+  // testing-library import is not a host dependency. Ship code, not tests.
+  const skip = (name) => /\.(test|spec)\.[^.]+$/.test(name) || name === "__tests__" || name === "tests";
+  const temp = `${dest}.tmp-${process.pid}`;
+  rmSync(temp, { recursive: true, force: true });
+  mkdirSync(temp, { recursive: true });
+  try {
+    cpSync(source, temp, { recursive: true, filter: (from) => !skip(from.split("/").pop() ?? "") });
+  } catch (error) {
+    rmSync(temp, { recursive: true, force: true });
+    return { ok: false, error: String(error) };
+  }
+
+  let files = 0;
+  const hash = createHash("sha256");
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) walk(abs);
+      else if (entry.isFile()) {
+        files += 1;
+        hash.update(abs.slice(temp.length));
+        hash.update(readFileSync(abs));
+      }
+    }
+  };
+  walk(temp);
+
+  rmSync(dest, { recursive: true, force: true });
+  renameSync(temp, dest);
+
+  const commit = spawnSync("git", ["-C", dirname(source), "rev-parse", "HEAD"], { encoding: "utf8" });
+  const pin = { source, commit: (commit.stdout ?? "").trim(), files, sha256: hash.digest("hex"), at: new Date().toISOString() };
+  writeFileSync(join(dirname(dest), ".pin.json"), `${JSON.stringify(pin, null, 2)}\n`, "utf8");
+  return { ok: true, ...pin, dest };
+}
+
 export function parseArgs(argv = process.argv.slice(2)) {
   const command = argv[0] ?? "status";
   const opts = {
@@ -856,6 +902,14 @@ export function runCli(argv = process.argv.slice(2)) {
     return result.ok ? 0 : 1;
   }
 
+  if (command === "vendor") {
+    const result = pluginVendor(root);
+    if (json) console.log(JSON.stringify(result, null, 2));
+    else if (result.ok) console.log(`[vendor] ${result.files} files · ${result.commit.slice(0, 9)} · ${result.dest}`);
+    else console.log(`[vendor] FAILED ${result.error}`);
+    return result.ok ? 0 : 1;
+  }
+
   if (command === "doctor") {
     const report = pluginDoctor(root);
     if (json) console.log(JSON.stringify(report, null, 2));
@@ -911,7 +965,7 @@ export function runCli(argv = process.argv.slice(2)) {
     return result.ok ? 0 : 1;
   }
 
-  console.error(`Unknown command: ${command}. Expected: status | snapshot | apply | remove | doctor | verify-diff | sync`);
+  console.error(`Unknown command: ${command}. Expected: status | snapshot | apply | remove | doctor | verify-diff | sync | vendor`);
   return 1;
 }
 

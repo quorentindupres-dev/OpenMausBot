@@ -128,7 +128,7 @@ Owned outright (3 dirs + 9 files): `src/components/space/`, `server/space/`,
 `scripts/setup-agent-mac.sh`, `docs/agent-computers-cua.md`, `docs/xlabs/README.md`,
 the two space tests.
 
-Seams (28 files): route table, `server/index.ts` (6 patches: imports, env,
+Seams (25 files): route table, `server/index.ts` (6 patches: imports, env,
 bind, prompt parts ×2, internal routes), volatile sections, agents catalog/call/
 env/catalog-profile, catalog goldens ×2, `TeamMapPage`, `ComputerPanel`,
 `computer-panel-view`, `computer-panel-tabs`, `en.json`, `tsconfig.json`,
@@ -195,7 +195,7 @@ test stay so upstream tests keep passing.
 
 ## 8. Portability notes (moving this to another host)
 
-- The layer touches the host in 28 places. Anything that provides these four
+- The layer touches the host in 25 places. Anything that provides these four
   things can host it: a route table, a prompt-parts hook, a tool catalog, and a
   React shell with a side panel.
 - `@xlabs/space-canvas` must ship inside the plugin (vendored), not from a

@@ -14,11 +14,11 @@ Verified state, 2026-11-03:
 | Fork commits on `main` | 15 (2 plugin + merges + earlier features) |
 | Upstream commits we are behind | 232 |
 | Plugin owned paths | 12 (3 dirs + 9 files → 61 files in `bundle/.owned.json`) |
-| Seams | 28 patches over 28 files (`jq '[.seams[].file]\|unique\|length'` → 28) |
+| Seams | 25 patches over 25 files (3 sibling-repo aliases were removed by vendoring) |
 | Deleted upstream files | 0 (the experimental settings **row** is patched out; the component and its test stay) |
-| `plugin status` | ok — 12/12 owned, 28/28 seams, 0/0 deleted |
+| `plugin status` | ok — 12/12 owned, 25/25 seams, 0/0 deleted |
 | Plugin tests | 3/3 pass |
-| Seams that apply cleanly on today's upstream tip | 28 / 28 (re-anchored 2026-11-03) |
+| Seams that apply cleanly on today's upstream tip | 25 / 25 |
 | Seams needing re-anchor | 0 |
 | Seams that only exist because of the sibling repo | 3 (`tsconfig.json`, `vite.config.ts`, `src/styles.css`) |
 
@@ -76,7 +76,7 @@ into a hard fork.
 
 v2 replaces `find`/`replace` with **steps**, each step an **anchor**, an
 **action**, and an **expectation**. A seam is a list of steps because 14 of the
-28 today carry 2–6 patches (largest: `server/index.ts` with 6,
+25 today carry 2–6 patches (largest: `server/index.ts` with 6,
 `src/components/TeamMapPage.tsx` with 5):
 
 ```json
@@ -154,11 +154,14 @@ Today three seams exist only to reach `../G_app-Space-Canvas`:
 A plugin that needs a sibling checkout one directory up is not portable, and
 those three seams break the moment the build runs anywhere else.
 
-Fix: `vendor` copies `G_app-Space-Canvas/src` into
-`plugins/xlabs-spaces/vendor/space-canvas/` and records `{ repo, commit, sha256 }`
-in `vendor/.pin.json`. The owned components import it by relative path
-(`../../vendor/space-canvas`). The dev repo stays the source of truth;
-`snapshot` re-vendors when its `HEAD` changes.
+Fix: `node scripts/xlabs-plugin.mjs vendor` copies `G_app-Space-Canvas/src`
+into `src/components/space/vendor/space-canvas/` (tests excluded: the host runs
+only `*.test.ts` and does not depend on testing-library) and records
+`{ source, commit, files, sha256 }` in `src/components/space/vendor/.pin.json`.
+Owned components import `./vendor/space-canvas`. The copy is atomic: build
+beside the target, then swap, so a failed run never leaves a half tree. Run
+`vendor` when the dev repo moves, then `snapshot`. Nothing at build time reads
+the sibling checkout.
 
 Result: 3 fewer seams, zero sibling-repo assumptions, plugin is self-contained.
 
@@ -167,11 +170,11 @@ Result: 3 fewer seams, zero sibling-repo assumptions, plugin is self-contained.
 | Branch | What it is | Status |
 |---|---|---|
 | `main` | the fork's old tree, still ahead of upstream | 🟠 **not reset yet** — one gated command, see below |
-| `plugin` | orphan ref, the layer only (28 seams, 61 owned files, 0 deleted) | 🟢 pushed |
+| `plugin` | orphan ref, the layer only (25 seams, 175 owned files incl. the vendored canvas, 0 deleted) | 🟢 pushed |
 | `xlabs` | `upstream/main` + the layer, one commit | 🟢 pushed, typecheck + tests + doctor green |
 
 Proven on the real tip `96493483c`: `sync` restored 61 owned files, applied
-**28/28 seams, 0 failures, 0 fallbacks**, committed `dea391aa1`, and
+**25/25 seams, 0 failures, 0 fallbacks**, committed `dea391aa1`, and
 `verify-diff` saw 103 changed paths, **0 outside the allowlist**.
 
 ### The one gated step (needs a human yes)
@@ -230,14 +233,14 @@ itself, which is 89 paths today. The allowlist is computed, not asserted:
 
 ```
 owned      = paths in bundle/.owned.json          (61)
-seamFiles  = unique seam files in plugin.json     (28)
+seamFiles  = unique seam files in plugin.json     (25)
 deleted    = plugin.json deletedFiles             (0)
 source     = plugins/xlabs-spaces/** , scripts/xlabs-plugin.mjs, scripts/xlabs-plugin.test.ts
 allowed    = owned ∪ seamFiles ∪ deleted ∪ source
 ```
 
 `verify-diff` prints `added / removed / changed` versus that set and exits 1 on
-anything else. Today the measured diff is exactly 89 paths = 61 + 28 + 0, which
+anything else. Today the measured diff is the computed allowlist (owned + seams + source), which
 is the proof the gate is meaningful rather than vacuous.
 
 If a gate fails, the branch is left in place with `bundle/.repair.json` and the
@@ -275,5 +278,5 @@ Upstream has open issues asking for a real plugin API (#3984 "Support plugins
 that modify the interface", #532 "Make the project modular"). Once Phase 1–3 is
 stable, the cheapest long-term sync is to contribute a tiny loader:
 `plugins/*/plugin.json` → `registerRoutes()`, `promptParts()`, `uiSlots()`.
-That would delete most of the 28 seams. Track it as a separate job; do not
+That would delete most of the 25 seams. Track it as a separate job; do not
 block sync on it.

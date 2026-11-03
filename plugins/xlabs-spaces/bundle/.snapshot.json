@@ -17,7 +17,7 @@
     "server/drivers/agents-space-tools.test.ts",
     "server/routes/space.test.ts"
   ],
-  "ownedFileCount": 64,
+  "ownedFileCount": 175,
   "deletedFiles": [],
   "seams": [
     "server/routes/table.ts",
@@ -31,9 +31,6 @@
     "src/lib/computer-panel-view.ts",
     "src/components/computer-panel-tabs.ts",
     "src/locales/en.json",
-    "tsconfig.json",
-    "vite.config.ts",
-    "src/styles.css",
     "src/components/NewBotDialog.tsx",
     "server/drivers/agents-catalog-profile.ts",
     "server/drivers/agents-catalog-goldens/profiles.json",
