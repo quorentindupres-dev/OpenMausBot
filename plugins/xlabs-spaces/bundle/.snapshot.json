@@ -1,0 +1,49 @@
+{
+  "id": "xlabs-spaces",
+  "version": "2.0.0",
+  "ownedDirs": [
+    "src/components/space",
+    "server/space",
+    "server/agent-computers"
+  ],
+  "ownedFiles": [
+    "shared/space.ts",
+    "shared/agent-computers.ts",
+    "server/routes/space.ts",
+    "server/drivers/agents-space-tools.ts",
+    "scripts/setup-agent-mac.sh",
+    "docs/agent-computers-cua.md",
+    "docs/xlabs/README.md",
+    "server/drivers/agents-space-tools.test.ts",
+    "server/routes/space.test.ts"
+  ],
+  "ownedFileCount": 176,
+  "deletedFiles": [],
+  "seams": [
+    "server/routes/table.ts",
+    "server/index.ts",
+    "server/system-prompt.ts",
+    "server/drivers/agents-catalog.ts",
+    "server/drivers/agents-call.ts",
+    "server/drivers/agents-mcp-env.ts",
+    "src/components/TeamMapPage.tsx",
+    "src/components/ComputerPanel.tsx",
+    "src/lib/computer-panel-view.ts",
+    "src/components/computer-panel-tabs.ts",
+    "src/locales/en.json",
+    "src/components/NewBotDialog.tsx",
+    "server/drivers/agents-catalog-profile.ts",
+    "server/drivers/agents-catalog-goldens/profiles.json",
+    "server/drivers/agents-catalog-goldens/bridged.profiles.json",
+    "src/components/TeamCanvas.tsx",
+    "src/components/app/AppMessage.tsx",
+    "package.json",
+    "electron-builder.yml",
+    "server/drivers/antigravity.ts",
+    "server/drivers/antigravity.test.ts",
+    "src/components/EnginesSettings.tsx",
+    "src/components/EnginesSettings.test.ts",
+    "src/components/AppSettingsRows.tsx",
+    "server/agents-turn.ts"
+  ]
+}
